@@ -25,7 +25,7 @@ Values below are names and handling rules only. Real secrets must be entered thr
 
 ## Deployment status at the last verification
 
-- Vercel project `thrynt` had no environment variables configured.
+- Vercel project `thrynt` has `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SUPABASE_URL` configured for production, preview and development. `NEXT_PUBLIC_SUPABASE_ANON_KEY` remains missing and must be added from the authorized Supabase project before browser authentication is expected to work.
 - Cloudflare Worker `thrynt` existed and its health route returned chain 50383, but its secret inventory was empty.
 - The configured Supabase public URL/anon key answered Auth settings, while the local server key was rejected and the application table endpoint returned 404. This means the target schema and server credential must be re-established before telemetry can be called operational.
 - Fly had no `thrynt-engine` application visible to the authenticated account.
