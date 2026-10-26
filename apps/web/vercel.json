@@ -1,1 +1,5 @@
-{"framework":"nextjs","buildCommand":"cd ../.. && npm run build -w @thrynt/core && npm run build -w @thrynt/web"}
+{
+  "framework": "nextjs",
+  "installCommand": "cd ../.. && npm ci --include=dev",
+  "buildCommand": "cd ../.. && npm run build -w @thrynt/core && npm run build -w @thrynt/web"
+}
