@@ -1,0 +1,19 @@
+# Set the actual unique app name during deployment.
+app = "thrynt-engine"
+primary_region = "lhr"
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "apps/engine/Dockerfile"
+
+[processes]
+  worker = "node apps/engine/dist/index.js"
+
+[[vm]]
+  processes = ["worker"]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+# No http_service: this is an outbound-only, permanently running worker.

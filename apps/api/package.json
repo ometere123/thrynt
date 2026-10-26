@@ -1,0 +1,6 @@
+{
+  "name": "@thrynt/api", "version": "0.1.0", "type": "module",
+  "scripts": {"dev": "wrangler dev", "build": "tsc --noEmit", "typecheck": "tsc --noEmit"},
+  "dependencies": {"@thrynt/core": "0.1.0", "@supabase/supabase-js": "^2.80.0", "hono": "^4.10.0"},
+  "devDependencies": {"@cloudflare/workers-types": "^4.20251001.0", "wrangler": "^4.45.0"}
+}

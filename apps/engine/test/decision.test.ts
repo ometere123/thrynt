@@ -1,0 +1,29 @@
+import {describe,expect,it} from "vitest";
+import {templates} from "@thrynt/core";
+import {intentKey,prepareTrade} from "../src/decision.js";
+
+describe("order preparation",()=>{
+  const input={market:"ETH" as const,observedAt:new Date().toISOString(),blockNumber:"99",
+    markUsd:4000,indexUsd:3990,premiumBps:25,fundingBps8h:2,
+    openInterestUsd:1e6,availableMarginUsd:200,marginRatioBps:50000};
+  const info={baseSymbol:"ETH" as const,baseDecimals:18,quoteDecimals:18,
+    poolAddress:"0x1111111111111111111111111111111111111111" as const,
+    marginBank:"0x2222222222222222222222222222222222222222" as const,
+    tickSize:1000000000000000n,lotSize:1000000000000000n,minQuantity:1000000000000000n};
+  it("aligns order to the pool tick/lot and never exceeds configured price band",()=>{
+    const p=prepareTrade(templates()[0]!,input,info);
+    expect(p.quantity%info.lotSize).toBe(0n);
+    expect(p.price%info.tickSize).toBe(0n);
+    expect(p.side).toBe("short");
+    expect(p.orderType).toBe(2);
+  });
+  it("uses a deterministic intent identity",()=>{
+    expect(intentKey("v1","evt",{})).toBe(intentKey("v1","evt",{}));
+    expect(intentKey("v2","evt",{})).not.toBe(intentKey("v1","evt",{}));
+  });
+  it("refuses a nonsensical reduction",()=>{
+    const rule=templates()[0]!;
+    rule.action={kind:"reduce",market:"ETH",percent:50,slippageBps:10};
+    expect(()=>prepareTrade(rule,input,info,0n)).toThrow("Nothing to reduce");
+  });
+});

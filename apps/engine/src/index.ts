@@ -1,0 +1,337 @@
+import {decodeEventLog,formatUnits} from "viem";
+import {perpPoolEventsAbi,orderBookEventsAbi} from "@somnia-chain/markets-sdk";
+import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
+import {ThryntApi,type StoredStrategy} from "./api.js";
+import {configFromEnv} from "./config.js";
+import {decide,intentKey,prepareTrade} from "./decision.js";
+import {SomniaPlane} from "./markets.js";
+import {LinkedBot} from "./operator.js";
+
+const config=configFromEnv();
+const api=new ThryntApi(config);
+const plane=new SomniaPlane(config);
+const bot=config.botPrivateKey
+  ?new LinkedBot(config.owner,config.botPrivateKey,plane.chain,config.rpc):null;
+const publicClient=plane.client.getViemClient();
+const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
+const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
+const acceptableEvents=new Set(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]);
+const observedPoolAbi=[...perpPoolEventsAbi,...orderBookEventsAbi] as const;
+type Event={
+  id:string;market:Market;kind:"FundingUpdated"|"OpenInterestUpdated"|"OrderPlaced";
+  txHash:`0x${string}`;blockNumber:bigint;logIndex:number;observedAt:string;
+};
+let stopped=false;
+let leased=false;
+let healthy=false;
+let feedHealthy=true;
+let seenBlock:string|null=null;
+let queue=Promise.resolve();
+let queued=0;
+const stopWatchers:(()=>void)[]=[];
+
+function rulesFor(s:StoredStrategy):{id:string;rule:Rule}|null {
+  const v=s.strategy_versions.find(x=>x.version===s.current_version);
+  return v?{id:v.id,rule:v.rule}:null;
+}
+async function snapshotsFor(rule:Rule) {
+  const markets=new Set<Market>([
+    rule.trigger.market,...rule.groups.flatMap(g=>g.conditions.map(c=>c.market)),
+    ...("market" in rule.action?[rule.action.market]:[]),
+  ]);
+  const snaps=await Promise.all([...markets].map(m=>plane.sample(m)));
+  for(const snap of snaps)await api.market(snap);
+  return snaps;
+}
+async function record(
+  s:StoredStrategy,versionId:string,event:Event,status:"unmatched"|"blocked"|"observed"|"paused",
+  evaluation:object,risk:Record<string,unknown>,
+) {
+  return api.decision({
+    strategyId:s.id,versionId,eventId:event.id,status,evaluation,risk,
+  });
+}
+
+async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause:boolean;lease_holder:string|null}) {
+  const selected=rulesFor(s);
+  if(!selected)return;
+  const {id:versionId,rule}=selected;
+  if(rule.trigger.market!==event.market||rule.trigger.event!==event.kind)return;
+  let snaps:MetricSnapshot[];
+  try {snaps=await snapshotsFor(rule);}
+  catch(err) {
+    await record(s,versionId,event,"blocked",{matched:false},
+      {blockedBy:["STALE_MARKET"],details:textError(err).slice(0,220)});
+    return;
+  }
+  const evaluation=decide(rule,snaps);
+  if(!evaluation.matched) {
+    await record(s,versionId,event,"unmatched",evaluation,{blockedBy:[]});
+    return;
+  }
+  if(status.global_pause||!leased||status.lease_holder!==config.instance) {
+    await record(s,versionId,event,"blocked",evaluation,{blockedBy:["PAUSED"]});
+    return;
+  }
+  if(rule.action.kind==="notify") {
+    await record(s,versionId,event,"observed",evaluation,{message:rule.action.message});
+    return;
+  }
+  if(rule.action.kind==="pause") {
+    await record(s,versionId,event,"paused",evaluation,{reason:"Margin Sentinel rule matched"});
+    await api.pause(s.id);
+    return;
+  }
+  const action=rule.action;
+  const snap=snaps.find(x=>x.market===action.market);
+  if(!snap)throw new Error("Action market snapshot unavailable");
+  const market=plane.info(action.market);
+  const position=action.kind==="reduce"?await plane.reducible(action.market):0n;
+  let order;
+  try {order=prepareTrade(rule,snap,market,position);}
+  catch(err) {
+    await record(s,versionId,event,"blocked",evaluation,{blockedBy:["SIZE_INVALID"],detail:textError(err)});
+    return;
+  }
+
+  // All decisions use fresh cross-margin state from the bank, plus protocol-side sizing.
+  const [account,exposure,permission,activity,sizing]=await Promise.all([
+    plane.client.getMarginAccount(market.marginBank,config.owner),
+    plane.exposureUsd(),
+    bot?bot.authorized(market.poolAddress):Promise.resolve(false),
+    api.activity(s.id),
+    plane.client.getMaxPerpOrderSize({
+      pool:market.poolAddress,marginBank:market.marginBank,account:config.owner,
+      isBid:order.side==="long",price:order.price,autoPull:false,
+    }),
+  ]);
+  const now=Date.now();
+  const oldest=Math.min(...snaps.map(x=>Date.parse(x.observedAt)));
+  const risk=checkRisk(rule,{
+    nowMs:now,armed:s.state==="armed",engineHealthy:healthy&&leased,
+    marketObservedAtMs:oldest,linkedBotPermission:permission,
+    availableMarginUsd:Number(formatUnits(account.unlockedCollateralBalance,market.quoteDecimals)),
+    currentExposureUsd:exposure,proposedNotionalUsd:order.notionalUsd,
+    actionsToday:activity.actionsToday,
+    lastActionAtMs:activity.lastActionAt?Date.parse(activity.lastActionAt):undefined,
+    marketPriceable:sizing.priceable&&sizing.placeable&&order.quantity<=sizing.maxQuantity,
+    duplicate:false,reduciblePositionSize:Number(position<0n?-position:position),
+  });
+  if(!risk.allowed) {
+    await record(s,versionId,event,"blocked",evaluation,{
+      blockedBy:risk.blockedBy,protocolLimit:sizing.priceable?sizing.limitedBy??null:"unpriceable",
+    });
+    return;
+  }
+  if(config.mode!=="live"||!config.liveOptIn) {
+    await record(s,versionId,event,"observed",evaluation,{
+      blockedBy:[],mode:config.mode,liveOptIn:config.liveOptIn,
+      proposed:{market:action.market,side:order.side,quantity:order.quantity.toString(),
+        price:order.price.toString(),notionalUsd:order.notionalUsd},
+      note:"Observed only. No signed transaction was submitted.",
+    });
+    return;
+  }
+  // An opposite-side IOC is not a protocol-guaranteed reduce-only instruction.
+  // Remain fail-closed until the venue's linked-bot reduce-only path is proven.
+  if(action.kind==="reduce") {
+    await record(s,versionId,event,"blocked",evaluation,{
+      blockedBy:["REDUCE_ONLY_NOT_VERIFIED"],
+      note:"No linked-bot reduce-only exchange guarantee; observe-only for this action",
+    });
+    return;
+  }
+  if(!bot)throw new Error("Live mode missing linked bot");
+  // Final fresh control-plane check. It can still race with a pause; minimize the window.
+  const refreshed=await api.state();
+  if(refreshed.status.global_pause||refreshed.status.lease_holder!==config.instance||
+    !refreshed.strategies.some(x=>x.id===s.id&&x.current_version===s.current_version)) {
+    await record(s,versionId,event,"blocked",evaluation,{blockedBy:["PAUSED"]});
+    return;
+  }
+  const intent=await record(s,versionId,event,"observed",evaluation,{blockedBy:[],protocolSizing:"passed"});
+  if(!intent.created)return; // No second order on an already-evaluated event.
+  const key=intentKey(versionId,event.id,action);
+  const reserved=await api.reserve({
+    key,decisionId:intent.id,poolAddress:market.poolAddress,
+    action:{kind:action.kind,market:action.market,side:order.side,
+      quantity:order.quantity.toString(),price:order.price.toString(),orderType:order.orderType},
+  });
+  if(!reserved.created)return;
+  await api.intentStatus(reserved.id,{status:"submitting",result:{note:"Reserved; signer about to submit"}});
+  try {
+    const result=await bot.place({
+      pool:market.poolAddress,isBid:order.side==="long",price:order.price,
+      quantity:order.quantity,orderType:order.orderType,
+    },hash=>api.intentStatus(reserved.id,{status:"submitted",txHash:hash,result:{broadcastAt:new Date().toISOString()}}).then(()=>{}));
+    await api.intentStatus(reserved.id,{
+      status:result.receiptStatus==="success"?"confirmed":"reverted",
+      txHash:result.hash,orderId:result.orderId,
+      result:{fillCount:result.fillCount,receiptStatus:result.receiptStatus,
+        note:"Receipt success proves onchain submission, not necessarily full fill"},
+    });
+  } catch(err) {
+    // Fail closed. A network timeout MAY mean broadcast already occurred.
+    // Neither this intent nor this event is automatically retried.
+    await api.intentStatus(reserved.id,{
+      status:"unknown",result:{reason:textError(err).slice(0,250),autoRetry:false},
+    }).catch(()=>{});
+    console.error("order uncertain; manual reconciliation required",reserved.id,textError(err));
+    healthy=false;
+  }
+}
+
+async function processEvent(event:Event) {
+  const proof=await publicClient.getTransactionReceipt({hash:event.txHash});
+  if(proof.status!=="success"||proof.blockNumber!==event.blockNumber)return;
+  const head=await publicClient.getBlockNumber();
+  seenBlock=head.toString();
+  // Do not execute events replayed far behind head after a reconnect.
+  if(head-event.blockNumber>3n) {
+    console.warn("Ignoring stale/replayed log",event.id);
+    return;
+  }
+  const snapshot=await api.state();
+  await api.event({
+    id:event.id,market:event.market,kind:event.kind,
+    blockNumber:event.blockNumber.toString(),txHash:event.txHash,
+    logIndex:event.logIndex,observedAt:event.observedAt,
+    captured:{source:"somnia-pool-log",receiptStatus:proof.status,head:head.toString()},
+  });
+  for(const s of snapshot.strategies) {
+    try {await processStrategy(s,event,snapshot.status);}
+    catch(err) {
+      console.error("Failed closed for",s.id,event.id,textError(err));
+      healthy=false;
+    }
+  }
+}
+
+function watchAllPools() {
+  for(const market of plane.pools()) {
+    const stop=publicClient.watchEvent({
+      address:market.poolAddress,
+      onLogs:logs=>{
+        for(const log of logs) {
+          if(!log.transactionHash||log.blockNumber===null||log.logIndex===null)continue;
+          let name:string;
+          try {
+            name=decodeEventLog({abi:observedPoolAbi,data:log.data,topics:log.topics}).eventName;
+          } catch {continue;}
+          if(!acceptableEvents.has(name))continue;
+          const kind=name as Event["kind"];
+          const event:Event={
+            market:market.baseSymbol,kind,txHash:log.transactionHash,
+            blockNumber:log.blockNumber,logIndex:log.logIndex,
+            observedAt:new Date().toISOString(),
+            id:`50383:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
+          };
+          if(queued>=100) {
+            healthy=false;feedHealthy=false;console.error("Event queue saturated; live execution halted");
+            break;
+          }
+          queued++;
+          queue=queue.then(()=>processEvent(event)).catch(err=>{
+            healthy=false;console.error("event handler error",textError(err));
+          }).finally(()=>{queued--;});
+        }
+      },
+      onError:error=>{
+        healthy=false;feedHealthy=false;
+        console.error("WS stream unhealthy; restart after verifying chain recovery",textError(error));
+      },
+    });
+    stopWatchers.push(stop);
+  }
+}
+
+async function reconcileUnresolved() {
+  const {intents}=await api.unresolved();
+  for(const intent of intents) {
+    if(!intent.tx_hash) {
+      console.error("Unresolved intent lacks tx hash; manual investigation required",intent.id);
+      return false;
+    }
+    try {
+      const receipt=await publicClient.getTransactionReceipt({hash:intent.tx_hash as `0x${string}`});
+      await api.intentStatus(intent.id,{
+        status:receipt.status==="success"?"confirmed":"reverted",
+        txHash:intent.tx_hash,
+        result:{reconciledOnRestart:true,receiptStatus:receipt.status,
+          note:"Order/fill state must also be inspected"},
+      });
+    } catch {
+      console.error("Unresolved hash not yet in chain; manual reconciliation",intent.id);
+      return false;
+    }
+  }
+  return true;
+}
+async function publishAccount() {
+  const first=plane.pools()[0];
+  if(!first)return;
+  const data=await plane.client.getMarginAccount(first.marginBank,config.owner);
+  const positions:{market:string;size:string;markUsd:number;notionalUsd:number}[]=[];
+  for(const active of data.activePerpPools) {
+    const pool=plane.pools().find(m=>m.poolAddress.toLowerCase()===active.toLowerCase());
+    if(!pool)throw new Error("Unknown pool holds account collateral");
+    const [position,price]=await Promise.all([
+      plane.client.getPerpPosition({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}),
+      plane.client.getPerpHealthSnapshot(pool.poolAddress),
+    ]);
+    if(!price.priceable)throw new Error("Active pool oracle unavailable");
+    const size=Number(formatUnits(position.size,pool.baseDecimals));
+    const markUsd=Number(formatUnits(price.markPrice,18));
+    positions.push({market:pool.baseSymbol,size:size.toString(),markUsd,notionalUsd:Math.abs(size)*markUsd});
+  }
+  await api.account({
+    observedAt:new Date().toISOString(),
+    equityUsd:Number(formatUnits(data.equity,first.quoteDecimals)),
+    availableMarginUsd:Number(formatUnits(data.unlockedCollateralBalance,first.quoteDecimals)),
+    lockedMarginUsd:Number(formatUnits(data.lockedCollateral,first.quoteDecimals)),
+    marginStatus:String(data.marginStatus),positions,
+  });
+}
+
+async function supervise() {
+  while(!stopped) {
+    try {
+      leased=(await api.lease()).acquired;
+      if(!leased){healthy=false;console.error("Lost singleton signing lease");}
+      else {
+        seenBlock=(await publicClient.getBlockNumber()).toString();
+        const clean=await reconcileUnresolved();
+        healthy=clean && queued<100 && feedHealthy;
+        await publishAccount();
+        await api.heartbeat(seenBlock,healthy?null:"Unresolved order or feed/queue issue");
+      }
+    } catch(err) {
+      healthy=false;leased=false;console.error("Heartbeat/lease failed",textError(err));
+    }
+    await sleep(15_000);
+  }
+}
+
+async function main() {
+  console.info("THRYNT start",{
+    chainId:50383,mode:config.mode,liveOptIn:config.liveOptIn,
+    owner:config.owner,botAddress:bot?.address??null,
+  });
+  const actualChain=await publicClient.getChainId();
+  if(actualChain!==50383)throw new Error(`Wrong chain ID: ${actualChain}`);
+  const symbols=await plane.initialize();
+  console.info("Verified live perps",symbols);
+  leased=(await api.lease()).acquired;
+  if(!leased)throw new Error("Another engine instance holds the lease");
+  healthy=await reconcileUnresolved();
+  watchAllPools();
+  console.info("Onchain pool log subscriptions",stopWatchers.length);
+  await supervise();
+}
+process.on("SIGTERM",()=>{stopped=true;healthy=false;stopWatchers.forEach(f=>f());});
+process.on("SIGINT",()=>{stopped=true;healthy=false;stopWatchers.forEach(f=>f());});
+main().catch(async err=>{
+  console.error("FATAL THRYNT",textError(err));
+  try{await plane.close();}catch{}
+  process.exitCode=1;
+});
