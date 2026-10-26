@@ -3,5 +3,8 @@ dist/
 .next/
 .env
 .env.local
+.env.*
+!.env.example
+.dev.vars*
 coverage/
 *.log
