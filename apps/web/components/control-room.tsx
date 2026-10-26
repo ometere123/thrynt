@@ -30,7 +30,8 @@ type Trace={
   evaluation:{matched?:boolean;conditions?:{metric:string;actual?:number;threshold:number;matched:boolean}[]};
   risk:{blockedBy?:string[];message?:string;details?:string};
   market_events?:{market:string;kind:string;block_number:string;transaction_hash:string}|null;
-  execution_intents?:{status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>}[]|null;
+  execution_intents?:{status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>;
+    receipt_status:string|null;accepted:boolean|null;order_state:string|null;reconciled_at:string|null}[]|null;
 };
 type AccountState={
   observedAt:string;equityUsd:number;availableMarginUsd:number;lockedMarginUsd:number;
@@ -659,7 +660,8 @@ function TraceCard({trace:t}:{trace:Trace}) {
       <div><span>Event transaction</span><code>{t.market_events?.transaction_hash??"—"}</code></div>
       <div><span>Condition result</span><strong>{t.evaluation.matched?"Matched":"Unmatched / blocked"}</strong></div>
       <div><span>Risk verdict</span><strong>{t.risk.blockedBy?.join(", ")||"No mandatory block recorded"}</strong></div>
-      <div><span>Onchain order</span><strong>{tx?.status??"No order submitted"}</strong></div>
+      <div><span>Submission</span><strong>{tx?.status??"No order submitted"}{tx?.receipt_status?` · receipt ${tx.receipt_status}`:""}</strong></div>
+      <div><span>Protocol outcome</span><strong>{tx?.order_state??"Not reconciled"}{tx?.order_id?` · order ${tx.order_id}`:""}</strong></div>
       {link&&<a href={link} target="_blank" rel="noopener noreferrer">Inspect transaction on Somnia Explorer <ExternalLink size={14}/></a>}
       <p className="small-note">The transaction receipt is independently verifiable. Strategy rationale is an application-generated record, not a cryptographic proof of honest evaluation.</p>
     </div>}

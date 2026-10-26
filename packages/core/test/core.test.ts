@@ -69,4 +69,23 @@ describe("Strategy Studio core", () => {
       proposedNotionalUsd:40,actionsToday:NaN,marketPriceable:true,duplicate:false,
     }).allowed).toBe(false);
   });
+  it("enforces margin, notional, exposure, daily and cooldown gates independently",()=>{
+    const rule=example();
+    rule.limits.minAvailableMarginUsd=200;rule.limits.maxNotionalUsd=50;
+    rule.limits.maxTotalExposureUsd=100;rule.limits.maxDailyActions=2;rule.limits.cooldownSeconds=60;
+    const now=Date.now();
+    const decision=checkRisk(rule,{nowMs:now,armed:true,engineHealthy:true,marketObservedAtMs:now,
+      linkedBotPermission:true,availableMarginUsd:10,currentExposureUsd:90,proposedNotionalUsd:60,
+      actionsToday:2,lastActionAtMs:now-1_000,marketPriceable:true,duplicate:false});
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockedBy).toEqual(expect.arrayContaining(["LOW_MARGIN","NOTIONAL_LIMIT","EXPOSURE_LIMIT","DAILY_LIMIT","COOLDOWN"]));
+  });
+  it("requires an actual position before allowing reduction",()=>{
+    const rule=example();rule.action={kind:"reduce",market:"ETH",percent:50,slippageBps:0};
+    const now=Date.now();
+    const decision=checkRisk(rule,{nowMs:now,armed:true,engineHealthy:true,marketObservedAtMs:now,
+      linkedBotPermission:true,availableMarginUsd:100,currentExposureUsd:0,proposedNotionalUsd:0,
+      actionsToday:0,marketPriceable:true,duplicate:false,reduciblePositionSize:0});
+    expect(decision.blockedBy).toContain("NO_POSITION");
+  });
 });

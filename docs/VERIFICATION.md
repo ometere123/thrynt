@@ -5,7 +5,7 @@ This is a release-gate checklist, not a claim the tests have already passed.
 ## Static checks
 
 - [ ] `npm ci` reproducible on Ubuntu and Windows runners.
-- [ ] `npm run typecheck`, `npm test`, `npm run build` pass.
+- [x] `npm run typecheck`, `npm test`, `npm run build` pass locally; CI/provider checks remain separate evidence.
 - [ ] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [ ] Supabase anon/authenticated can neither SELECT nor mutate application tables.
 - [ ] Worker denies wrong JWT, wrong owner, and a wrong/short engine key.
@@ -15,8 +15,8 @@ This is a release-gate checklist, not a claim the tests have already passed.
 
 ## Real Hideki integration
 
-- [ ] Chain ID resolves to 50383, independent read via RPC.
-- [ ] SDK 0.32.1 discovers real perp markets and correct pool addresses.
+- [x] Chain ID resolves to 50383, independent read via RPC.
+- [x] SDK 0.32.1 discovers real perp markets and correct pool addresses.
 - [ ] WebSocket receives `FundingUpdated`, `OpenInterestUpdated` and `OrderPlaced` as expected; unsupported ABI log names disabled.
 - [ ] Two-market observation fetches the current mark/index/funding state, not stale indexer-row values.
 - [ ] Each event has an actual chain receipt, transaction hash, block and log index.

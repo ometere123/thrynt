@@ -21,6 +21,7 @@ export function configFromEnv(env:NodeJS.ProcessEnv=process.env):EngineConfig {
     throw new Error("Live mode requires a dedicated linked BOT_PRIVATE_KEY");
   const rpc=env.SOMNIA_RPC_URL??"https://api.hideki2.infra.testnet.somnia.network";
   const ws=env.SOMNIA_WS_URL??"wss://api.hideki2.infra.testnet.somnia.network/ws";
+  if(!rpc.startsWith("https://"))throw new Error("Somnia RPC must be HTTPS");
   if(!ws.startsWith("wss://"))throw new Error("Somnia WebSocket must be secure");
   return {
     apiUrl:apiUrl.replace(/\/$/,""),apiKey,instance:env.ENGINE_INSTANCE_ID??"thrynt-fly-1",

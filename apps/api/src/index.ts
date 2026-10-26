@@ -7,6 +7,9 @@ type Variables = {userId: string};
 const app = new Hono<{Bindings:Env;Variables:Variables}>();
 const uuid = z.string().uuid();
 const errorReply = (message:string) => ({error:message});
+function firstRow<T>(value:T|T[]|null):T|null {
+  return Array.isArray(value) ? (value[0]??null) : value;
+}
 
 app.use("*",async (c,next)=>{
   const origin=c.req.header("Origin");
@@ -18,6 +21,9 @@ app.use("*",async (c,next)=>{
   }
   c.header("Cache-Control","no-store");
   c.header("X-Content-Type-Options","nosniff");
+  const contentLength=Number(c.req.header("Content-Length")??0);
+  if(Number.isFinite(contentLength)&&contentLength>256_000)
+    return c.json(errorReply("Request too large"),413);
   if (c.req.method==="OPTIONS") return c.body(null,204);
   await next();
 });
@@ -25,7 +31,7 @@ app.get("/health",c=>c.json({ok:true,service:"thrynt-api",chainId:50383}));
 app.get("/v1/public/overview",async c=>{
   const conn=db(c.env);
   const [engine,markets,decisions,strategies,account]=await Promise.all([
-    conn.from("engine_status").select("global_pause,last_heartbeat,current_block").eq("singleton",true).single(),
+    conn.from("engine_status").select("global_pause,last_heartbeat,current_block,observed_chain_id,lease_generation").eq("singleton",true).single(),
     conn.from("market_snapshots").select("symbol,block_number,observed_at,metrics").order("symbol"),
     conn.from("decisions").select("id,status,recorded_at").order("recorded_at",{ascending:false}).limit(12),
     conn.from("strategies").select("state"),
@@ -35,7 +41,7 @@ app.get("/v1/public/overview",async c=>{
     return c.json(errorReply("Public telemetry unavailable"),503);
   const last=engine.data?.last_heartbeat;
   return c.json({
-    engine:{healthy:Boolean(last&&Date.now()-Date.parse(last)<90_000),
+    engine:{healthy:Boolean(last&&Date.now()-Date.parse(last)<90_000&&engine.data?.observed_chain_id===50383),
       paused:engine.data?.global_pause??true,block:engine.data?.current_block??null},
     markets:markets.data??[],strategyCounts:{armed:(strategies.data??[]).filter(s=>s.state==="armed").length,
       total:strategies.data?.length??0},
@@ -50,7 +56,7 @@ app.get("/v1/public/overview",async c=>{
 });
 app.get("/v1/public/traces",async c=>{
   const {data,error}=await db(c.env).from("decisions")
-    .select("id,status,recorded_at,evaluation,risk,market_events(market,kind,block_number,transaction_hash),execution_intents(status,tx_hash,order_id,result)")
+    .select("id,status,recorded_at,evaluation,risk,market_events(market,kind,block_number,transaction_hash),execution_intents(status,tx_hash,order_id,result,receipt_status,accepted,order_state,reconciled_at)")
     .order("recorded_at",{ascending:false}).limit(40);
   if (error) return c.json(errorReply("History unavailable"),503);
   return c.json({traces:data??[],explorer:"https://explorer.testnet.somnia.network/tokyo"});
@@ -81,33 +87,27 @@ app.post("/v1/owner/strategies",async c=>{
   const check=validateRule(await c.req.json().catch(()=>null));
   if(!check.valid||!check.rule)return c.json({errors:check.errors,warnings:check.warnings},422);
   const conn=db(c.env);
-  const {data:s,error}=await conn.from("strategies").insert({
-    owner_user_id:c.get("userId"),name:check.rule.name,state:"draft",current_version:1,
-  }).select("id").single();
-  if(error||!s)return c.json(errorReply("Creation failed"),503);
-  const {error:ve}=await conn.from("strategy_versions").insert({
-    strategy_id:s.id,version:1,rule:check.rule,fingerprint:await fingerprint(check.rule),
+  const {data,error}=await conn.rpc("create_strategy_with_version",{
+    p_owner:c.get("userId"),p_rule:check.rule,p_fingerprint:await fingerprint(check.rule),
   });
-  if(ve)return c.json(errorReply("Immutable version insert failed; discard orphan draft"),503);
-  return c.json({id:s.id,version:1,warnings:check.warnings},201);
+  const created=firstRow<{strategy_id:string;version_id:string;version:number}>(data);
+  if(error||!created)return c.json(errorReply("Creation failed"),503);
+  return c.json({id:created.strategy_id,version:created.version,warnings:check.warnings},201);
 });
 app.post("/v1/owner/strategies/:id/version",async c=>{
-  const s=await owned(c.env,c.req.param("id"),c.get("userId"));
+  const strategyId=c.req.param("id");
+  const s=await owned(c.env,strategyId,c.get("userId"));
   if(!s)return c.json(errorReply("Strategy not found"),404);
   if(s.state==="armed")return c.json(errorReply("Pause before revising"),409);
   const check=validateRule(await c.req.json().catch(()=>null));
   if(!check.valid||!check.rule)return c.json({errors:check.errors},422);
-  const next=s.current_version+1;
-  const conn=db(c.env);
-  const {error:ve}=await conn.from("strategy_versions").insert({
-    strategy_id:s.id,version:next,rule:check.rule,fingerprint:await fingerprint(check.rule),
+  const {data,error}=await db(c.env).rpc("create_strategy_version",{
+    p_owner:c.get("userId"),p_strategy_id:strategyId,p_rule:check.rule,
+    p_fingerprint:await fingerprint(check.rule),
   });
-  if(ve)return c.json(errorReply("Could not insert new rule version"),503);
-  const {data:updated,error}=await conn.from("strategies")
-    .update({current_version:next,state:"draft",name:check.rule.name,updated_at:new Date().toISOString()})
-    .eq("id",s.id).eq("current_version",s.current_version).neq("state","armed").select("id").maybeSingle();
-  if(error||!updated)return c.json(errorReply("Concurrent strategy modification"),409);
-  return c.json({id:s.id,version:next,warnings:check.warnings});
+  const created=firstRow<{strategy_id:string;version_id:string;version:number}>(data);
+  if(error||!created)return c.json(errorReply("Concurrent strategy modification"),409);
+  return c.json({id:created.strategy_id,version:created.version,warnings:check.warnings});
 });
 app.post("/v1/owner/strategies/:id/simulate",async c=>{
   const s=await owned(c.env,c.req.param("id"),c.get("userId"));
@@ -129,23 +129,16 @@ app.post("/v1/owner/strategies/:id/simulate",async c=>{
   return c.json({simulationId:data.id,result,disclaimer:"Preview inputs are illustrative, not independently verified market observations"});
 });
 app.post("/v1/owner/strategies/:id/arm",async c=>{
-  const s=await owned(c.env,c.req.param("id"),c.get("userId"));
+  const strategyId=c.req.param("id");
+  const s=await owned(c.env,strategyId,c.get("userId"));
   if(!s)return c.json(errorReply("Not found"),404);
-  if(s.state==="armed")return c.json({state:"armed"});
-  const v=await latest(c.env,s);
-  if(!v)return c.json(errorReply("Version unavailable"),503);
-  const check=validateRule(v.rule);
-  if(!check.valid)return c.json({errors:check.errors},422);
-  const conn=db(c.env);
-  const {data:sim}=await conn.from("simulations").select("id")
-    .eq("strategy_version_id",v.id).order("created_at",{ascending:false}).limit(1);
-  if(!sim?.length)return c.json(errorReply("Simulate this rule version before arming"),409);
-  const {data:updated,error}=await conn.from("strategies")
-    .update({state:"armed",updated_at:new Date().toISOString()})
-    .eq("id",s.id).eq("current_version",s.current_version)
-    .in("state",["draft","paused"]).select("id").maybeSingle();
-  if(error||!updated)return c.json(errorReply("Unable to arm strategy"),409);
-  return c.json({state:"armed",version:s.current_version});
+  const {data,error}=await db(c.env).rpc("arm_strategy",{
+    p_owner:c.get("userId"),p_strategy_id:strategyId,
+  });
+  const armed=firstRow<{armed:boolean;version:number}>(data);
+  if(error||!armed)return c.json(errorReply("Unable to arm strategy"),409);
+  if(!armed.armed)return c.json(errorReply("Simulate this rule version before arming"),409);
+  return c.json({state:"armed",version:armed.version});
 });
 app.post("/v1/owner/strategies/:id/pause",async c=>{
   const s=await owned(c.env,c.req.param("id"),c.get("userId"));
@@ -172,28 +165,29 @@ app.use("/v1/engine/*",async(c,next)=>{
 app.post("/v1/engine/lease",async c=>{
   const p=z.object({instance:z.string().min(1).max(100)}).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid instance"),400);
-  const {data,error}=await db(c.env).rpc("acquire_engine_lease",{p_instance:p.data.instance,p_seconds:40});
+  const {data,error}=await db(c.env).rpc("acquire_engine_lease_fenced",{p_instance:p.data.instance,p_seconds:40});
   if(error)return c.json(errorReply("Lease unavailable"),503);
-  return c.json({acquired:data===true});
+  const lease=firstRow<{acquired:boolean;generation:number|string}>(data);
+  return c.json({acquired:Boolean(lease?.acquired),generation:lease?.generation?.toString()??null});
 });
 app.get("/v1/engine/strategies",async c=>{
   const conn=db(c.env);
   const [s,status]=await Promise.all([
     conn.from("strategies").select("id,state,current_version,strategy_versions(id,version,rule,fingerprint)")
       .eq("state","armed"),
-    conn.from("engine_status").select("global_pause,lease_holder,lease_until").eq("singleton",true).single(),
+    conn.from("engine_status").select("global_pause,lease_holder,lease_until,lease_generation").eq("singleton",true).single(),
   ]);
   if(s.error||status.error)return c.json(errorReply("Engine state unavailable"),503);
   return c.json({strategies:s.data??[],status:status.data});
 });
 app.post("/v1/engine/heartbeat",async c=>{
-  const p=z.object({instance:z.string().min(1).max(100),block:z.string().regex(/^\d+$/).nullable(),
+  const p=z.object({instance:z.string().min(1).max(100),generation:z.string().regex(/^\d+$/),block:z.string().regex(/^\d+$/).nullable(),
     error:z.string().max(300).nullable()}).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid heartbeat"),400);
   const {data,error}=await db(c.env).from("engine_status").update({
     last_heartbeat:new Date().toISOString(),observed_chain_id:50383,
     current_block:p.data.block,error:p.data.error,updated_at:new Date().toISOString(),
-  }).eq("singleton",true).eq("lease_holder",p.data.instance).select("singleton").maybeSingle();
+  }).eq("singleton",true).eq("lease_holder",p.data.instance).eq("lease_generation",p.data.generation).select("singleton").maybeSingle();
   if(error||!data)return c.json(errorReply("Lease lost"),409);
   return c.json({ok:true});
 });
@@ -230,11 +224,11 @@ app.post("/v1/engine/account",async c=>{
 });
 app.post("/v1/engine/event",async c=>{
   const p=z.object({
-    id:z.string().min(20).max(180),market:z.string().max(20),
+    id:z.string().min(20).max(180),market:z.enum(["BTC","ETH","SOL","XRP","DOGE"]),
     kind:z.enum(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]),
     blockNumber:z.string().regex(/^\d+$/),txHash:z.string().regex(/^0x[a-fA-F0-9]{64}$/),
     logIndex:z.number().int().nonnegative(),observedAt:z.string().datetime({offset:true}),
-    captured:z.record(z.unknown()),
+    captured:z.record(z.string(),z.unknown()),
   }).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid event"),422);
   const x=p.data;
@@ -249,7 +243,7 @@ app.post("/v1/engine/decision",async c=>{
   const p=z.object({
     strategyId:uuid,versionId:uuid,eventId:z.string().min(20),
     status:z.enum(["unmatched","blocked","observed","reserved","paused"]),
-    evaluation:z.record(z.unknown()),risk:z.record(z.unknown()),
+    evaluation:z.record(z.string(),z.unknown()),risk:z.record(z.string(),z.unknown()),
   }).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid decision"),422);
   const x=p.data;
@@ -267,42 +261,42 @@ app.post("/v1/engine/decision",async c=>{
 });
 app.post("/v1/engine/intent",async c=>{
   const p=z.object({key:z.string().regex(/^[a-f0-9]{64}$/),decisionId:uuid,
-    action:z.record(z.unknown()),poolAddress:z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+    action:z.record(z.string(),z.unknown()),poolAddress:z.string().regex(/^0x[a-fA-F0-9]{40}$/).optional(),
+    instance:z.string().min(1).max(100),generation:z.string().regex(/^\d+$/),
   }).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid intent"),422);
-  const x=p.data;const conn=db(c.env);
-  const {data:decision}=await conn.from("decisions").select("strategy_id")
-    .eq("id",x.decisionId).single();
-  if(!decision)return c.json(errorReply("Decision not found"),404);
-  const [strategy,settings]=await Promise.all([
-    conn.from("strategies").select("state").eq("id",decision.strategy_id).single(),
-    conn.from("engine_status").select("global_pause").eq("singleton",true).single(),
-  ]);
-  if(strategy.data?.state!=="armed"||settings.data?.global_pause)
-    return c.json(errorReply("Trading disabled or strategy paused"),409);
-  const {data,error}=await conn.from("execution_intents").insert({
-    idempotency_key:x.key,decision_id:x.decisionId,pool_address:x.poolAddress,action:x.action,
-  }).select("id").single();
-  if(error?.code==="23505")return c.json({created:false,error:"Duplicate intent"},409);
-  if(error||!data)return c.json(errorReply("Intent reservation failed"),503);
-  return c.json({created:true,id:data.id},201);
+  const x=p.data;
+  const {data,error}=await db(c.env).rpc("reserve_execution_intent_fenced",{
+    p_idempotency_key:x.key,p_decision_id:x.decisionId,p_pool_address:x.poolAddress??null,
+    p_action:x.action,p_instance:x.instance,p_generation:x.generation,
+  });
+  const result=firstRow<{created:boolean;id:string|null;reason:string}>(data);
+  if(error||!result)return c.json(errorReply("Intent reservation failed"),503);
+  if(result.reason==="duplicate")return c.json({created:false,id:result.id,reason:result.reason});
+  if(!result.created)return c.json(errorReply(result.reason==="lease_lost"?"Lease lost":"Trading disabled or decision unavailable"),409);
+  return c.json({created:true,id:result.id},201);
 });
 app.post("/v1/engine/intent/:id/status",async c=>{
   const id=c.req.param("id");
   if(!uuid.safeParse(id).success)return c.json(errorReply("Invalid intent ID"),400);
   const p=z.object({
+    instance:z.string().min(1).max(100),generation:z.string().regex(/^\d+$/),
     status:z.enum(["submitting","submitted","confirmed","reverted","unknown","reconciled"]),
     txHash:z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
     orderId:z.string().regex(/^\d+$/).optional(),
-    result:z.record(z.unknown()).default({}),
+    result:z.record(z.string(),z.unknown()).default({}),receiptStatus:z.enum(["success","reverted"]).optional(),
+    accepted:z.boolean().optional(),orderState:z.enum(["unknown","accepted","resting","partially_filled","filled","canceled","ioc_no_fill","reverted","rejected"]).optional(),
+    lastError:z.string().max(300).optional(),
   }).safeParse(await c.req.json().catch(()=>null));
   if(!p.success)return c.json(errorReply("Invalid status"),422);
   const x=p.data;
-  const {error}=await db(c.env).from("execution_intents").update({
-    status:x.status,...(x.txHash?{tx_hash:x.txHash}:{}),
-    ...(x.orderId?{order_id:x.orderId}:{}),result:x.result,updated_at:new Date().toISOString(),
-  }).eq("id",id);
-  if(error)return c.json(errorReply("Intent update failed"),503);
+  const {data,error}=await db(c.env).rpc("update_execution_intent_fenced",{
+    p_id:id,p_instance:x.instance,p_generation:x.generation,p_status:x.status,
+    p_tx_hash:x.txHash??null,p_order_id:x.orderId??null,p_result:x.result,
+    p_receipt_status:x.receiptStatus??null,p_accepted:x.accepted??null,
+    p_order_state:x.orderState??null,p_last_error:x.lastError??null,
+  });
+  if(error||data!==true)return c.json(errorReply("Lease lost or invalid intent transition"),409);
   return c.json({ok:true});
 });
 app.get("/v1/engine/activity/:id",async c=>{
@@ -319,7 +313,7 @@ app.get("/v1/engine/activity/:id",async c=>{
 });
 app.get("/v1/engine/unresolved",async c=>{
   const {data,error}=await db(c.env).from("execution_intents")
-    .select("id,status,tx_hash,created_at").in("status",["reserved","submitting","submitted","unknown"])
+    .select("id,status,tx_hash,created_at,order_id,result,action,pool_address,engine_instance,lease_generation").in("status",["reserved","submitting","submitted","unknown"])
     .order("created_at",{ascending:true}).limit(30);
   if(error)return c.json(errorReply("Unable to reconcile pending intents"),503);
   return c.json({intents:data??[]});

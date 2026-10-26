@@ -23,12 +23,14 @@ type Event={
 };
 let stopped=false;
 let leased=false;
+let leaseGeneration:string|null=null;
 let healthy=false;
 let feedHealthy=true;
 let seenBlock:string|null=null;
 let queue=Promise.resolve();
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
+let restartTimer:ReturnType<typeof setTimeout>|null=null;
 
 function rulesFor(s:StoredStrategy):{id:string;rule:Rule}|null {
   const v=s.strategy_versions.find(x=>x.version===s.current_version);
@@ -52,7 +54,7 @@ async function record(
   });
 }
 
-async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause:boolean;lease_holder:string|null}) {
+async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause:boolean;lease_holder:string|null;lease_generation:string|number|null}) {
   const selected=rulesFor(s);
   if(!selected)return;
   const {id:versionId,rule}=selected;
@@ -69,7 +71,8 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     await record(s,versionId,event,"unmatched",evaluation,{blockedBy:[]});
     return;
   }
-  if(status.global_pause||!leased||status.lease_holder!==config.instance) {
+  if(status.global_pause||!leased||!leaseGeneration||status.lease_holder!==config.instance||
+    status.lease_generation?.toString()!==leaseGeneration) {
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["PAUSED"]});
     return;
   }
@@ -98,7 +101,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   const [account,exposure,permission,activity,sizing]=await Promise.all([
     plane.client.getMarginAccount(market.marginBank,config.owner),
     plane.exposureUsd(),
-    bot?bot.authorized(market.poolAddress):Promise.resolve(false),
+    bot?(action.kind==="reduce"?bot.reduceAuthorized(market.poolAddress):bot.authorized(market.poolAddress)):Promise.resolve(false),
     api.activity(s.id),
     plane.client.getMaxPerpOrderSize({
       pool:market.poolAddress,marginBank:market.marginBank,account:config.owner,
@@ -144,7 +147,8 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   if(!bot)throw new Error("Live mode missing linked bot");
   // Final fresh control-plane check. It can still race with a pause; minimize the window.
   const refreshed=await api.state();
-  if(refreshed.status.global_pause||refreshed.status.lease_holder!==config.instance||
+  if(!leaseGeneration||refreshed.status.global_pause||refreshed.status.lease_holder!==config.instance||
+    refreshed.status.lease_generation?.toString()!==leaseGeneration||
     !refreshed.strategies.some(x=>x.id===s.id&&x.current_version===s.current_version)) {
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["PAUSED"]});
     return;
@@ -154,27 +158,44 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   const key=intentKey(versionId,event.id,action);
   const reserved=await api.reserve({
     key,decisionId:intent.id,poolAddress:market.poolAddress,
+    instance:config.instance,generation:leaseGeneration,
     action:{kind:action.kind,market:action.market,side:order.side,
       quantity:order.quantity.toString(),price:order.price.toString(),orderType:order.orderType},
   });
-  if(!reserved.created)return;
-  await api.intentStatus(reserved.id,{status:"submitting",result:{note:"Reserved; signer about to submit"}});
+  const generation=leaseGeneration;
+  if(!reserved.created||!reserved.id||!generation)return;
+  const intentId=reserved.id;
+  await api.intentStatus(intentId,{instance:config.instance,generation,status:"submitting",result:{note:"Reserved; signer about to submit"}});
   try {
     const result=await bot.place({
       pool:market.poolAddress,isBid:order.side==="long",price:order.price,
       quantity:order.quantity,orderType:order.orderType,
-    },hash=>api.intentStatus(reserved.id,{status:"submitted",txHash:hash,result:{broadcastAt:new Date().toISOString()}}).then(()=>{}));
-    await api.intentStatus(reserved.id,{
-      status:result.receiptStatus==="success"?"confirmed":"reverted",
-      txHash:result.hash,orderId:result.orderId,
-      result:{fillCount:result.fillCount,receiptStatus:result.receiptStatus,
-        note:"Receipt success proves onchain submission, not necessarily full fill"},
-    });
+    },hash=>api.intentStatus(intentId,{instance:config.instance,generation,status:"submitted",txHash:hash,result:{broadcastAt:new Date().toISOString()}}).then(()=>{}));
+    let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"reverted"=result.orderState;
+    let reconciliation:Record<string,unknown>|undefined;
+    if(result.receiptStatus==="success"&&result.orderId) {
+      try {
+        reconciliation=await plane.reconcileOrder(market.poolAddress,result.orderId);
+        const indexed=reconciliation.indexed as {status?:string}|null;
+        if(indexed?.status?.toLowerCase()==="open")orderState=result.fillCount?"partially_filled":"resting";
+        else if(indexed?.status?.toLowerCase().includes("fill"))orderState="filled";
+        else if(indexed?.status?.toLowerCase().includes("cancel")||indexed?.status?.toLowerCase().includes("expire"))orderState="canceled";
+        else if(reconciliation.chainResting)orderState=result.fillCount?"partially_filled":"resting";
+      } catch(err) {reconciliation={error:textError(err).slice(0,220),indexerOrChainRead:"unavailable"};orderState="unknown";}
+    }
+    const evidenceComplete=result.receiptStatus==="reverted"||
+      (result.fillCount>0&&!result.orderId)||
+      Boolean(result.orderId&&orderState!=="unknown");
+    await api.intentStatus(intentId,{instance:config.instance,generation,status:evidenceComplete?"reconciled":"unknown",
+      txHash:result.hash,orderId:result.orderId,receiptStatus:result.receiptStatus,accepted:result.accepted,orderState,
+      result:{fillCount:result.fillCount,receiptStatus:result.receiptStatus,reconciliation,note:"Receipt and protocol event evidence are recorded separately from fill state"},
+      lastError:evidenceComplete?undefined:"Receipt succeeded without an order or fill event"});
+    if(!evidenceComplete)healthy=false;
   } catch(err) {
     // Fail closed. A network timeout MAY mean broadcast already occurred.
     // Neither this intent nor this event is automatically retried.
-    await api.intentStatus(reserved.id,{
-      status:"unknown",result:{reason:textError(err).slice(0,250),autoRetry:false},
+    await api.intentStatus(intentId,{instance:config.instance,generation,status:"unknown",
+      result:{reason:textError(err).slice(0,250),autoRetry:false},lastError:textError(err).slice(0,250),
     }).catch(()=>{});
     console.error("order uncertain; manual reconciliation required",reserved.id,textError(err));
     healthy=false;
@@ -208,6 +229,7 @@ async function processEvent(event:Event) {
 }
 
 function watchAllPools() {
+  while(stopWatchers.length)stopWatchers.pop()?.();
   for(const market of plane.pools()) {
     const stop=publicClient.watchEvent({
       address:market.poolAddress,
@@ -239,6 +261,20 @@ function watchAllPools() {
       onError:error=>{
         healthy=false;feedHealthy=false;
         console.error("WS stream unhealthy; restart after verifying chain recovery",textError(error));
+        if(!restartTimer&&!stopped) {
+          restartTimer=setTimeout(async()=>{
+            restartTimer=null;
+            try {
+              const head=await publicClient.getBlockNumber();
+              if(seenBlock&&head-BigInt(seenBlock)>3n) {
+                console.error("Event recovery gap exceeds safe replay window; live execution remains suspended",{from:seenBlock,to:head.toString()});
+                return;
+              }
+              watchAllPools();feedHealthy=true;
+              console.info("Somnia event subscriptions restarted after a bounded gap");
+            } catch(err) {console.error("Event subscription recovery failed",textError(err));}
+          },5_000);
+        }
       },
     });
     stopWatchers.push(stop);
@@ -254,12 +290,30 @@ async function reconcileUnresolved() {
     }
     try {
       const receipt=await publicClient.getTransactionReceipt({hash:intent.tx_hash as `0x${string}`});
-      await api.intentStatus(intent.id,{
-        status:receipt.status==="success"?"confirmed":"reverted",
-        txHash:intent.tx_hash,
-        result:{reconciledOnRestart:true,receiptStatus:receipt.status,
-          note:"Order/fill state must also be inspected"},
-      });
+      let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"reverted"="unknown";
+      let reconciliation:Record<string,unknown>|undefined;
+      const action=intent.action as {market?:string};
+      if(receipt.status==="reverted")orderState="reverted";
+      else if(intent.order_id&&action.market) {
+        try {
+          const market=plane.info(action.market as Market);
+          reconciliation=await plane.reconcileOrder(market.poolAddress,intent.order_id);
+          const indexed=reconciliation.indexed as {status?:string}|null;
+          if(indexed?.status?.toLowerCase()==="open")orderState="resting";
+          else if(indexed?.status?.toLowerCase().includes("fill"))orderState="filled";
+          else if(indexed?.status?.toLowerCase().includes("cancel")||indexed?.status?.toLowerCase().includes("expire"))orderState="canceled";
+          else if(reconciliation.chainResting)orderState="resting";
+        } catch(err) {reconciliation={error:textError(err).slice(0,220)};}
+      }
+      const fillCount=Number(intent.result?.fillCount??0);
+      const evidence=receipt.status==="reverted"||orderState!=="unknown"||fillCount>0;
+      await api.intentStatus(intent.id,{instance:config.instance,generation:leaseGeneration!,
+        status:evidence?"reconciled":"unknown",txHash:intent.tx_hash,
+        accepted:evidence&&receipt.status==="success",orderState,
+        result:{...intent.result,reconciledOnRestart:true,receiptStatus:receipt.status,reconciliation,
+          note:"Restart reconciliation uses receipt events, chain-head order state, and indexer history"},
+        lastError:evidence?undefined:"Receipt exists but protocol order state is unresolved"});
+      if(!evidence)return false;
     } catch {
       console.error("Unresolved hash not yet in chain; manual reconciliation",intent.id);
       return false;
@@ -296,14 +350,16 @@ async function publishAccount() {
 async function supervise() {
   while(!stopped) {
     try {
-      leased=(await api.lease()).acquired;
+      const lease=await api.lease();
+      leased=lease.acquired&&Boolean(lease.generation);
+      leaseGeneration=leased?lease.generation:null;
       if(!leased){healthy=false;console.error("Lost singleton signing lease");}
       else {
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
         healthy=clean && queued<100 && feedHealthy;
         await publishAccount();
-        await api.heartbeat(seenBlock,healthy?null:"Unresolved order or feed/queue issue");
+        await api.heartbeat(leaseGeneration!,seenBlock,healthy?null:"Unresolved order or feed/queue issue");
       }
     } catch(err) {
       healthy=false;leased=false;console.error("Heartbeat/lease failed",textError(err));
@@ -321,7 +377,9 @@ async function main() {
   if(actualChain!==50383)throw new Error(`Wrong chain ID: ${actualChain}`);
   const symbols=await plane.initialize();
   console.info("Verified live perps",symbols);
-  leased=(await api.lease()).acquired;
+  const lease=await api.lease();
+  leased=lease.acquired&&Boolean(lease.generation);
+  leaseGeneration=leased?lease.generation:null;
   if(!leased)throw new Error("Another engine instance holds the lease");
   healthy=await reconcileUnresolved();
   watchAllPools();

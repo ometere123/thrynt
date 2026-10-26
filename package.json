@@ -5,7 +5,7 @@
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "typecheck": "npm run build -w @thrynt/core && npm run typecheck -w @thrynt/api && npm run typecheck -w @thrynt/engine && npm run typecheck -w @thrynt/web",
-    "test": "npm run test -w @thrynt/core && npm run test -w @thrynt/engine",
+    "test": "npm run build -w @thrynt/core && npm run test -w @thrynt/core && npm run test -w @thrynt/engine",
     "build": "npm run build -w @thrynt/core && npm run build -w @thrynt/api && npm run build -w @thrynt/engine && npm run build -w @thrynt/web",
     "dev:web": "npm run dev -w @thrynt/web",
     "dev:api": "npm run dev -w @thrynt/api",
@@ -16,5 +16,8 @@
     "@types/node": "^22.15.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "overrides": {
+    "zod": "^4.6.7"
   }
 }

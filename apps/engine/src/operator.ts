@@ -13,9 +13,11 @@ const ABI=[
 const ZERO="0x0000000000000000000000000000000000000000" as const;
 const PLACE_SELECTOR="0x80054449" as const;
 const CANCEL_SELECTOR="0xe37b444b" as const;
+const REDUCE_SELECTOR="0x364c2587" as const;
 export interface Placement {
   hash:`0x${string}`;receiptStatus:"success"|"reverted";
-  orderId?:string;fillCount:number;
+  orderId?:string;fillCount:number;accepted:boolean;
+  orderState:"unknown"|"resting"|"partially_filled"|"filled";
 }
 export class LinkedBot {
   private readonly account;
@@ -37,6 +39,10 @@ export class LinkedBot {
     const [place,cancel]=await Promise.all([ask(PLACE_SELECTOR),ask(CANCEL_SELECTOR)]);
     return Boolean(place&&cancel);
   }
+  async reduceAuthorized(pool:`0x${string}`) {
+    return Boolean(await this.publicClient.readContract({address:pool,abi:ABI,
+      functionName:"isOperatorAuthorized",args:[this.owner,this.account.address,REDUCE_SELECTOR]}));
+  }
   async place(input:{pool:`0x${string}`;isBid:boolean;price:bigint;quantity:bigint;orderType:0|2|3},
     onHash:(hash:`0x${string}`)=>Promise<void>):Promise<Placement> {
     const expires=BigInt(Math.floor(Date.now()/1000)+300)*1_000_000_000n;
@@ -49,7 +55,9 @@ export class LinkedBot {
     await onHash(hash);
     const receipt=await this.publicClient.waitForTransactionReceipt({hash,timeout:90_000});
     const decoded=receipt.status==="success"?decodePlaceOrder(receipt,input.pool):null;
-    return {hash,receiptStatus:receipt.status,
-      orderId:decoded?.orderId?.toString(),fillCount:decoded?.fills.length??0};
+    const orderId=decoded?.orderId?.toString();
+    const fillCount=decoded?.fills.length??0;
+    return {hash,receiptStatus:receipt.status,orderId,fillCount,accepted:Boolean(orderId||fillCount),
+      orderState:orderId?(fillCount?"partially_filled":"resting"):(fillCount?"filled":"unknown")};
   }
 }

@@ -1,4 +1,4 @@
 {
   "name": "thrynt", "main": "src/index.ts", "compatibility_date": "2025-10-01",
-  "compatibility_flags": ["nodejs_compat"], "vars": {"ALLOWED_ORIGIN": "http://localhost:3000"}
+  "compatibility_flags": ["nodejs_compat"], "vars": {"ALLOWED_ORIGIN": "https://thrynt.vercel.app"}
 }

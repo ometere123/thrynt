@@ -7,7 +7,7 @@ export interface StoredStrategy {
 }
 export interface EngineState {
   strategies:StoredStrategy[];
-  status:{global_pause:boolean;lease_holder:string|null;lease_until:string|null};
+  status:{global_pause:boolean;lease_holder:string|null;lease_until:string|null;lease_generation:string|number|null};
 }
 export class ThryntApi {
   constructor(private readonly config:EngineConfig){}
@@ -25,18 +25,18 @@ export class ThryntApi {
       return data;
     } finally {clearTimeout(timeout);}
   }
-  lease(){return this.request<{acquired:boolean}>("/v1/engine/lease",{instance:this.config.instance});}
+  lease(){return this.request<{acquired:boolean;generation:string|null}>("/v1/engine/lease",{instance:this.config.instance});}
   state(){return this.request<EngineState>("/v1/engine/strategies");}
-  heartbeat(block:string|null,error:string|null){
-    return this.request("/v1/engine/heartbeat",{instance:this.config.instance,block,error});
+  heartbeat(generation:string,block:string|null,error:string|null){
+    return this.request("/v1/engine/heartbeat",{instance:this.config.instance,generation,block,error});
   }
   market(snapshot:unknown){return this.request("/v1/engine/market",snapshot);}
   account(snapshot:unknown){return this.request("/v1/engine/account",snapshot);}
   event(value:unknown){return this.request("/v1/engine/event",value);}
   decision(value:unknown){return this.request<{id:string;created:boolean}>("/v1/engine/decision",value);}
   activity(id:string){return this.request<{actionsToday:number;lastActionAt:string|null}>(`/v1/engine/activity/${id}`);}
-  reserve(value:unknown){return this.request<{created:boolean;id:string}>("/v1/engine/intent",value);}
+  reserve(value:unknown){return this.request<{created:boolean;id:string|null;reason?:string}>("/v1/engine/intent",value);}
   intentStatus(id:string,value:unknown){return this.request(`/v1/engine/intent/${id}/status`,value);}
-  unresolved(){return this.request<{intents:{id:string;status:string;tx_hash:string|null;created_at:string}[]}>("/v1/engine/unresolved");}
+  unresolved(){return this.request<{intents:{id:string;status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>;action:Record<string,unknown>;pool_address:string|null;created_at:string}[]}>("/v1/engine/unresolved");}
   pause(id:string){return this.request(`/v1/engine/pause/${id}`,{});}
 }

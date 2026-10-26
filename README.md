@@ -10,7 +10,7 @@ This repository contains source code and deployment configuration. **It is not a
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Frontend | Vercel, Next.js 15, React 19, TypeScript, CSS | Seven responsive trading-control views, owner sign-in |
+| Frontend | Vercel, Next.js 16, React 19, TypeScript, CSS | Seven responsive trading-control views, owner sign-in |
 | API | Cloudflare Workers, Hono | Protected owner writes, engine messages, public redacted reads |
 | Database | Supabase Postgres | Versions, snapshots, traces, deduplication, leases, transactions |
 | Execution | Fly.io worker, Node 22 | WebSocket listener, deterministic rules, risk checks, bot signer |
@@ -42,7 +42,7 @@ The Worker holds Supabase's server key; the Fly worker holds the dedicated linke
 - `apps/web`: Vercel Next.js frontend, read-only judge pages and authorized Strategy Studio.
 - `apps/api`: Cloudflare Worker, Supabase API, explicit trader allowlist and engine secret.
 - `apps/engine`: Fly-only long-running Node.js process, Somnia observations and linked bot.
-- `supabase/migrations`: schema, locked-down access, immutable rule versions and engine lease.
+- `supabase/migrations`: schema, locked-down access, immutable rule versions, fenced leases and execution-intent reconciliation.
 - `docs`: design, threat model, test/deployment verification requirements.
 
 ## Strategy Studio
@@ -94,9 +94,9 @@ npm run dev:web
 
 Copy `.env.example` into local environment variables; do **not** put real secrets into tracked files. The web UI can run in a disconnected read-only state; it does not fabricate testnet balances or transaction IDs.
 
-1. Apply `supabase/migrations/0001_thrynt.sql` and `0002_account_telemetry.sql` using the Supabase SQL Editor after checking the project target.
+1. Apply `supabase/migrations/0001_thrynt.sql`, `0002_account_telemetry.sql`, and `0003_execution_integrity.sql` using the Supabase SQL Editor after checking the project target. Never reset an existing project.
 2. Enable email link sign-in in Supabase Auth, authorize the correct redirect domain, sign in once, and set the resulting Supabase Auth user UUID as `TRADER_USER_ID` on Cloudflare.
-3. Deploy the Cloudflare Worker, setting server-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ENGINE_API_KEY`, and exact `ALLOWED_ORIGIN`.
+3. Deploy the Cloudflare Worker named `thrynt`, setting server-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ENGINE_API_KEY`, and exact `ALLOWED_ORIGIN`.
 4. Deploy the web frontend to Vercel with the public Worker URL and Supabase publishable key.
 5. On DreamDEX Hideki, create/fund the OWNER account with USDso margin, create a separate bot key with STT for gas, then Link a Bot for the required perp pools.
 6. Configure Fly secrets: `THRYNT_API_URL`, `THRYNT_ENGINE_API_KEY`, `OWNER_ADDRESS`, `BOT_PRIVATE_KEY`, and Somnia endpoints.
@@ -114,6 +114,10 @@ fly scale count 1
 ```
 
 Pass the monorepo root as Docker build context. The worker has **no public HTTP port**. The Fly account may require billing even for a small worker; do not assume an indefinite free allowance.
+
+## Current verification boundary
+
+The repository has been verified against Hideki RPC/GraphQL and SDK market discovery, but deployment state is intentionally reported separately from source readiness. A successful Worker `/health` response proves only that the Worker is reachable; it does not prove Supabase telemetry or engine execution. Before live signing, verify that the production Supabase project contains all three migrations, configure the Worker secrets, deploy the frontend public variables, and run the observation-only engine. Keep `EXECUTION_MODE=observe` and `ENABLE_TESTNET_EXECUTION=false` until the owner explicitly authorizes the first bounded testnet transaction.
 
 ## Tests and acceptance
 

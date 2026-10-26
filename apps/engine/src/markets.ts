@@ -117,5 +117,17 @@ export class SomniaPlane {
     });
     return BigInt(position.size);
   }
+  async reconcileOrder(poolAddress:`0x${string}`,orderId:string) {
+    const id=BigInt(orderId);
+    const [onchain,history]=await Promise.all([
+      this.sdk.client.getOrderOnchain(poolAddress,id),
+      this.sdk.client.listPerpOrderHistory(this.config.owner,{pool:poolAddress,limit:100}),
+    ]);
+    const indexed=history.find(row=>row.orderId===orderId)??null;
+    return {chainResting:Boolean(onchain),indexed:indexed?{
+      status:indexed.status,rested:indexed.rested,filledQuantity:indexed.filledQuantity,
+      quantityRemaining:indexed.quantityRemaining,cancelReason:indexed.cancelReason,
+    }:null};
+  }
   async close() {await this.sdk.close();}
 }
