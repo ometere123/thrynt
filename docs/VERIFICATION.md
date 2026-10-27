@@ -7,7 +7,7 @@ items remain intentionally blocked or require the first owner-authorized order.
 
 - [x] An earlier clean `npm ci` completed locally; the Fly image also ran `npm ci --no-audit --no-fund` successfully.
 - [ ] The final post-change Windows `npm ci` rerun stalled during dependency extraction and was interrupted; rerun this gate in Linux CI before treating the release as fully green.
-- [x] Final clean Linux CI ran `npm ci`, `npm audit --omit=dev --audit-level=high`, `npm run typecheck`, `npm test`, `npm run build`, Playwright browser installation and `npm run test:e2e` successfully: [GitHub Actions run 40470099724](https://github.com/ometere123/thrynt/actions/runs/40470099724).
+- [x] Final clean Linux CI ran `npm ci`, `npm audit --omit=dev --audit-level=high`, `npm run typecheck`, `npm test`, `npm run build`, pinned Chromium installation and `npm run test:e2e` successfully: [GitHub Actions run 40470710733](https://github.com/ometere123/thrynt/actions/runs/40470710733).
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
 - [x] Worker denies anonymous and malformed trader authentication; the approved production session completed owner writes through the explicit `TRADER_USER_ID` allowlist. A separate valid JWT for an unapproved identity was not created solely for testing.
