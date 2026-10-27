@@ -17,7 +17,8 @@ const REDUCE_SELECTOR="0x364c2587" as const;
 export interface Placement {
   hash:`0x${string}`;receiptStatus:"success"|"reverted";
   orderId?:string;fillCount:number;accepted:boolean;
-  orderState:"unknown"|"resting"|"partially_filled"|"filled";
+  orderState:"unknown"|"resting"|"partially_filled"|"filled"|"ioc_no_fill";
+  decoded:boolean;
 }
 export class LinkedBot {
   private readonly account;
@@ -57,7 +58,9 @@ export class LinkedBot {
     const decoded=receipt.status==="success"?decodePlaceOrder(receipt,input.pool):null;
     const orderId=decoded?.orderId?.toString();
     const fillCount=decoded?.fills.length??0;
+    const orderState=orderId?(fillCount?"partially_filled":"resting"):
+      (fillCount?"filled":(input.orderType===2&&decoded?"ioc_no_fill":"unknown"));
     return {hash,receiptStatus:receipt.status,orderId,fillCount,accepted:Boolean(orderId||fillCount),
-      orderState:orderId?(fillCount?"partially_filled":"resting"):(fillCount?"filled":"unknown")};
+      orderState,decoded:Boolean(decoded)};
   }
 }

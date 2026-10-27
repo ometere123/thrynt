@@ -1,6 +1,6 @@
 import {decodeEventLog,formatUnits} from "viem";
 import {createServer,type Server} from "node:http";
-import {perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
+import {decodePlaceOrder,perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
 import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
@@ -249,7 +249,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
       pool:market.poolAddress,isBid:order.side==="long",price:order.price,
       quantity:order.quantity,orderType:order.orderType,
     },hash=>api.intentStatus(intentId,{instance:config.instance,generation,status:"submitted",txHash:hash,result:{broadcastAt:new Date().toISOString()}}).then(()=>{}));
-    let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"reverted"=result.orderState;
+    let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"ioc_no_fill"|"reverted"=result.orderState;
     let reconciliation:Record<string,unknown>|undefined;
     if(result.receiptStatus==="success"&&result.orderId) {
       try {
@@ -263,6 +263,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     }
     const evidenceComplete=result.receiptStatus==="reverted"||
       (result.fillCount>0&&!result.orderId)||
+      orderState==="ioc_no_fill"||
       Boolean(result.orderId&&orderState!=="unknown");
     await api.intentStatus(intentId,{instance:config.instance,generation,status:evidenceComplete?"reconciled":"unknown",
       txHash:result.hash,orderId:result.orderId,receiptStatus:result.receiptStatus,accepted:result.accepted,orderState,
@@ -413,27 +414,34 @@ async function reconcileUnresolved() {
     }
     try {
       const receipt=await publicClient.getTransactionReceipt({hash:intent.tx_hash as `0x${string}`});
-      let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"reverted"="unknown";
+      let orderState:"unknown"|"resting"|"partially_filled"|"filled"|"canceled"|"ioc_no_fill"|"reverted"="unknown";
       let reconciliation:Record<string,unknown>|undefined;
-      const action=intent.action as {market?:string};
+      const action=intent.action as {market?:string;orderType?:number};
+      let orderId=intent.order_id;
+      let fillCount=Number(intent.result?.fillCount??0);
       if(receipt.status==="reverted")orderState="reverted";
-      else if(intent.order_id&&action.market) {
+      else if(action.market) {
         try {
           const market=plane.info(action.market as Market);
-          reconciliation=await plane.reconcileOrder(market.poolAddress,intent.order_id);
-          const indexed=reconciliation.indexed as {status?:string}|null;
-          if(indexed?.status?.toLowerCase()==="open")orderState="resting";
-          else if(indexed?.status?.toLowerCase().includes("fill"))orderState="filled";
-          else if(indexed?.status?.toLowerCase().includes("cancel")||indexed?.status?.toLowerCase().includes("expire"))orderState="canceled";
-          else if(reconciliation.chainResting)orderState="resting";
+          const decoded=decodePlaceOrder(receipt,market.poolAddress);
+          fillCount=decoded.fills.length;
+          if(decoded.orderId)orderId=decoded.orderId.toString();
+          if(!orderId&&fillCount===0&&action.orderType===2)orderState="ioc_no_fill";
+          if(orderId) {
+            reconciliation=await plane.reconcileOrder(market.poolAddress,orderId);
+            const indexed=reconciliation.indexed as {status?:string}|null;
+            if(indexed?.status?.toLowerCase()==="open")orderState=fillCount?"partially_filled":"resting";
+            else if(indexed?.status?.toLowerCase().includes("fill"))orderState="filled";
+            else if(indexed?.status?.toLowerCase().includes("cancel")||indexed?.status?.toLowerCase().includes("expire"))orderState="canceled";
+            else if(reconciliation.chainResting)orderState=fillCount?"partially_filled":"resting";
+          } else if(fillCount>0)orderState="filled";
         } catch(err) {reconciliation={error:textError(err).slice(0,220)};}
       }
-      const fillCount=Number(intent.result?.fillCount??0);
       const evidence=receipt.status==="reverted"||orderState!=="unknown"||fillCount>0;
       await api.intentStatus(intent.id,{instance:config.instance,generation:leaseGeneration!,
-        status:evidence?"reconciled":"unknown",txHash:intent.tx_hash,
-        accepted:evidence&&receipt.status==="success",orderState,
-        result:{...intent.result,reconciledOnRestart:true,receiptStatus:receipt.status,reconciliation,
+        status:evidence?"reconciled":"unknown",txHash:intent.tx_hash,orderId:orderId??undefined,
+        accepted:evidence&&receipt.status==="success"&&orderState!=="ioc_no_fill",orderState,
+        result:{...intent.result,reconciledOnRestart:true,receiptStatus:receipt.status,reconciliation,fillCount,
           note:"Restart reconciliation uses receipt events, chain-head order state, and indexer history"},
         lastError:evidence?undefined:"Receipt exists but protocol order state is unresolved"});
       if(!evidence)return false;
