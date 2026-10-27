@@ -23,6 +23,7 @@ Values below are names and handling rules only. Real secrets must be entered thr
 | `EXECUTION_MODE` | Fly/local | No | Yes | `observe`, `simulate`, or `live`; default is `observe`. |
 | `ENABLE_TESTNET_EXECUTION` | Fly/local | No | Yes | Must remain `false` until explicit owner authorization; the engine also requires `EXECUTION_MODE=live`. |
 | `THRYNT_AUTHORIZED_MAX_PRICE_USD` | Fly/local | No | Temporary | Optional positive USD ceiling applied to the prepared order price during a single explicitly bounded authorization window; unset after reconciliation. |
+| `THRYNT_AUTHORIZED_MIN_SELL_PRICE_USD` | Fly/local | No | Temporary | Optional positive absolute floor applied to a prepared short sell price during a single explicitly bounded authorization window; unset after reconciliation. |
 | `ENGINE_INSTANCE_ID` | Fly/local | No | Yes | Stable unique executor identity used by the fenced lease. |
 | `PORT` | Fly/local | No | Optional | Health server port; defaults to `8080` and is the only Fly service port. |
 
