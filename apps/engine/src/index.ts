@@ -2,7 +2,7 @@ import {decodeEventLog,formatUnits,parseUnits} from "viem";
 import {createServer,type Server} from "node:http";
 import {decodePlaceOrder,perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
-import {createPublicClient,http} from "viem";
+import {createPublicClient,http,type Log} from "viem";
 import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
 import {decide,intentKey,prepareTrade} from "./decision.js";
@@ -49,7 +49,10 @@ const stopWatchers:(()=>void)[]=[];
 const sdkWatchers:{stop:()=>void}[]=[];
 let sdkPerpWatcher:{stop:()=>void}|null=null;
 let sdkLiveUnsubscribe:(()=>void)|null=null;
-let restartTimer:ReturnType<typeof setTimeout>|null=null;
+let rawPollTimer:ReturnType<typeof setTimeout>|null=null;
+let rawPollRunning=false;
+let rawNextBlock:bigint|null=null;
+let rawSuspended=false;
 let healthServer:Server|null=null;
 let cachedState:EngineState|null=null;
 let cachedStateAt=0;
@@ -370,60 +373,77 @@ async function processEvent(event:Event) {
   }
 }
 
+function enqueueRawLog(market:ReturnType<SomniaPlane["pools"]>[number],log:Log) {
+  if(!log.transactionHash||log.blockNumber===null||log.logIndex===null)return;
+  let name:string;
+  try {
+    name=decodeEventLog({abi:observedPoolAbi,data:log.data,topics:log.topics}).eventName;
+  } catch {return;}
+  if(!acceptableEvents.has(name))return;
+  const kind=name as Event["kind"];
+  const event:Event={
+    market:market.baseSymbol,kind,txHash:log.transactionHash,
+    blockNumber:log.blockNumber,logIndex:log.logIndex,
+    observedAt:new Date().toISOString(),
+    id:`50383:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
+  };
+  if(!interested(event))return;
+  if(queued>=100) {
+    healthy=false;feedHealthy=false;console.error("Event queue saturated; live execution halted");
+    return;
+  }
+  queued++;
+  queue=queue.then(()=>processEvent(event)).catch(err=>{
+    healthy=false;console.error("event handler error",textError(err));
+  }).finally(()=>{queued--;});
+}
+
+async function pollRawLogs() {
+  if(stopped||rawSuspended||rawPollRunning)return;
+  rawPollRunning=true;
+  try {
+    const head=await publicClient.getBlockNumber();
+    if(rawNextBlock===null)rawNextBlock=head;
+    if(head>=rawNextBlock) {
+      if(head-rawNextBlock>3n) {
+        rawSuspended=true;rawFeedHealthy=false;feedHealthy=false;
+        console.error("Event recovery gap exceeds safe replay window; live execution remains suspended",{
+          from:rawNextBlock.toString(),to:head.toString(),
+        });
+        return;
+      }
+      for(const market of plane.pools()) {
+        const logs=await publicClient.getLogs({
+          address:market.poolAddress,
+          fromBlock:rawNextBlock,
+          toBlock:head,
+        });
+        for(const log of logs)enqueueRawLog(market,log);
+      }
+      rawNextBlock=head+1n;
+    }
+    rawFeedHealthy=true;
+    refreshFeedHealth();
+  } catch(err) {
+    rawFeedHealthy=false;feedHealthy=false;
+    console.error("Raw onchain log polling failed; live execution suspended",textError(err));
+  } finally {
+    rawPollRunning=false;
+    if(!stopped&&!rawSuspended)rawPollTimer=setTimeout(()=>{
+      rawPollTimer=null;void pollRawLogs();
+    },2_000);
+  }
+}
+
 function watchAllPools() {
   while(stopWatchers.length)stopWatchers.pop()?.();
-  for(const market of plane.pools()) {
-    const stop=publicClient.watchEvent({
-      address:market.poolAddress,
-      poll:true,
-      pollingInterval:2_000,
-      onLogs:logs=>{
-        for(const log of logs) {
-          if(!log.transactionHash||log.blockNumber===null||log.logIndex===null)continue;
-          let name:string;
-          try {
-            name=decodeEventLog({abi:observedPoolAbi,data:log.data,topics:log.topics}).eventName;
-          } catch {continue;}
-          if(!acceptableEvents.has(name))continue;
-          const kind=name as Event["kind"];
-          const event:Event={
-            market:market.baseSymbol,kind,txHash:log.transactionHash,
-            blockNumber:log.blockNumber,logIndex:log.logIndex,
-            observedAt:new Date().toISOString(),
-            id:`50383:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
-          };
-          if(!interested(event))continue;
-          if(queued>=100) {
-            healthy=false;feedHealthy=false;console.error("Event queue saturated; live execution halted");
-            break;
-          }
-          queued++;
-          queue=queue.then(()=>processEvent(event)).catch(err=>{
-            healthy=false;console.error("event handler error",textError(err));
-          }).finally(()=>{queued--;});
-        }
-      },
-      onError:error=>{
-        healthy=false;rawFeedHealthy=false;feedHealthy=false;
-        console.error("WS stream unhealthy; restart after verifying chain recovery",textError(error));
-        if(!restartTimer&&!stopped) {
-          restartTimer=setTimeout(async()=>{
-            restartTimer=null;
-            try {
-              const head=await publicClient.getBlockNumber();
-              if(seenBlock&&head-BigInt(seenBlock)>3n) {
-                console.error("Event recovery gap exceeds safe replay window; live execution remains suspended",{from:seenBlock,to:head.toString()});
-                return;
-              }
-              watchAllPools();rawFeedHealthy=true;refreshFeedHealth();
-              console.info("Somnia event subscriptions restarted after a bounded gap");
-            } catch(err) {console.error("Event subscription recovery failed",textError(err));}
-          },5_000);
-        }
-      },
-    });
-    stopWatchers.push(stop);
-  }
+  if(rawPollTimer)clearTimeout(rawPollTimer);
+  rawPollTimer=null;rawNextBlock=null;rawSuspended=false;
+  void pollRawLogs();
+  stopWatchers.push(()=>{
+    if(rawPollTimer)clearTimeout(rawPollTimer);
+    rawPollTimer=null;rawSuspended=true;
+  });
 }
 
 function refreshFeedHealth() {
@@ -602,7 +622,7 @@ async function shutdown(signal:string) {
   if(stopped)return;
   stopped=true;healthy=false;stopWatchers.forEach(f=>f());
   stopSdkFeed();
-  if(restartTimer)clearTimeout(restartTimer);
+  if(rawPollTimer)clearTimeout(rawPollTimer);
   await stopHealthServer();
   try {await plane.close();} catch(err) {console.error("Shutdown close failed",textError(err));}
   console.info("THRYNT stopped",{signal});
