@@ -15,7 +15,7 @@
   "engines": {"node": ">=22"},
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "@playwright/test": "1.55.0",
+    "@playwright/test": "1.55.1",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   },
