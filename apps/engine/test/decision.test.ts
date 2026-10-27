@@ -45,4 +45,11 @@ describe("order preparation",()=>{
     const book={blockNumber:99n,bestBid:null,bestAsk:parseUnits("4001",18)};
     expect(()=>prepareTrade(templates()[0]!,input,info,0n,book)).toThrow("No executable short side");
   });
+  it("fails closed when a long has no executable ask",()=>{
+    const rule=structuredClone(templates()[0]!);
+    if(rule.action.kind!=="trade")throw new Error("expected trade template");
+    rule.action.side="long";
+    const book={blockNumber:99n,bestBid:parseUnits("3999",18),bestAsk:null};
+    expect(()=>prepareTrade(rule,input,info,0n,book)).toThrow("No executable long side");
+  });
 });

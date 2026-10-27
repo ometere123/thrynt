@@ -126,7 +126,7 @@ Pass the monorepo root as Docker build context. The worker exposes only non-secr
 
 ## Current verification boundary
 
-The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and a real pool-log subscription from the Fly runtime. The production engine now also starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. A direct workstation WSS probe timed out, and the raw viem log watcher has observed provider timeouts/replayed logs; those gaps are recorded and cause fail-closed suspension until recovery. The Worker public overview reports real engine heartbeat and account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address, but the engine remains observation-only and no transaction has been broadcast by THRYNT.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. Two genuine `OpenInterestUpdated` events matched the controlled demonstration strategy and were recorded as `PAUSED` safety rejections with no execution intent or transaction. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address, but the engine remains observation-only and no transaction has been broadcast by THRYNT.
 
 Keep `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled until the exact bounded testnet order preflight is reviewed and the owner explicitly authorizes that transaction.
 
@@ -137,9 +137,14 @@ npm run typecheck
 npm test
 npm run build
 npm run test:e2e
+npm audit --omit=dev --audit-level=high
 ```
 
 See [the verification matrix](docs/VERIFICATION.md) before enabling live orders. Type checking and mocked deterministic tests alone are **not** evidence of a real, finalized transaction. For every actual order, verify receipt status, order ID, resting/fill state, correct owner wallet, risk preflight and explorer link.
+
+## X posts
+
+The MVP bounty requires two or three genuine posts about THRYNT that tag `@DreamDEXSomnia`. No post URLs are inserted until the owner publishes them; placeholders would be fabricated evidence. Publication-ready drafts and the exact insertion checklist are in [the hackathon submission guide](docs/HACKATHON_SUBMISSION.md).
 
 ## Scope boundaries
 

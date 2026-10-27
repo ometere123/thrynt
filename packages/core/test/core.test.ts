@@ -40,6 +40,14 @@ describe("Strategy Studio core", () => {
     expect(evaluate(example(), [snapshot("BTC"), snapshot("ETH")]).matched).toBe(true);
     expect(evaluate(example(), [snapshot("BTC")]).matched).toBe(false);
   });
+  it("fails closed when a referenced metric is missing", () => {
+    const rule = structuredClone(example());
+    rule.groups[0]!.conditions = [{id: "missing", market: "ETH", metric: "fundingBps8h", compare: "gt", value: 0}];
+    const result = evaluate(rule, [snapshot("BTC")]);
+    expect(result.matched).toBe(false);
+    expect(result.reasons).toContain("ETH fundingBps8h unavailable");
+    expect(result.conditions[0]?.actual).toBeUndefined();
+  });
   it("never lets OR bypass mandatory risk checks", () => {
     const rule = example();
     rule.groupsOperator = "ANY";
@@ -60,6 +68,24 @@ describe("Strategy Studio core", () => {
       proposedNotionalUsd: 50, actionsToday: 0, marketPriceable: true, duplicate: true,
     });
     expect(decision.blockedBy).toEqual(["NO_PERMISSION", "DUPLICATE"]);
+  });
+  it("blocks expiry, pause and engine-health failures independently", () => {
+    const rule = structuredClone(example());
+    rule.limits.expiresAt = new Date(Date.now() - 1).toISOString();
+    const result = checkRisk(rule, {
+      nowMs: Date.now(), armed: false, engineHealthy: false, marketObservedAtMs: Date.now(),
+      linkedBotPermission: true, availableMarginUsd: 100, currentExposureUsd: 0,
+      proposedNotionalUsd: 10, actionsToday: 0, marketPriceable: true, duplicate: false,
+    });
+    expect(result.blockedBy).toEqual(expect.arrayContaining(["PAUSED", "EXPIRED", "ENGINE_UNHEALTHY"]));
+  });
+  it("blocks unpriceable and invalid order size before submission", () => {
+    const result = checkRisk(example(), {
+      nowMs: Date.now(), armed: true, engineHealthy: true, marketObservedAtMs: Date.now(),
+      linkedBotPermission: true, availableMarginUsd: 100, currentExposureUsd: 0,
+      proposedNotionalUsd: Number.NaN, actionsToday: 0, marketPriceable: false, duplicate: false,
+    });
+    expect(result.blockedBy).toEqual(expect.arrayContaining(["UNPRICEABLE", "SIZE_INVALID"]));
   });
   it("does not accept NaN account inputs as a pass",()=>{
     const now=Date.now();
@@ -87,5 +113,18 @@ describe("Strategy Studio core", () => {
       linkedBotPermission:true,availableMarginUsd:100,currentExposureUsd:0,proposedNotionalUsd:0,
       actionsToday:0,marketPriceable:true,duplicate:false,reduciblePositionSize:0});
     expect(decision.blockedBy).toContain("NO_POSITION");
+  });
+  it("rejects duplicate condition IDs and post-only slippage", () => {
+    const rule = structuredClone(example());
+    rule.groups[0]!.conditions[0]!.id = rule.groups[0]!.conditions[1]?.id ?? "same";
+    if (rule.action.kind !== "trade") throw new Error("expected trade template");
+    rule.action.orderType = "POST_ONLY";
+    rule.action.slippageBps = 1;
+    const result = validateRule(rule);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "Condition IDs must be unique",
+      "A post-only order cannot request taker slippage",
+    ]));
   });
 });
