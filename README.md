@@ -4,7 +4,7 @@
 
 THRYNT is an open-source, event-driven DreamDEX perpetuals automation and decision-audit system targeting **Somnia Hideki testnet** (chain ID **50383**). It combines no-code deterministic rules, account-level safety gates, permissioned order execution and inspectable decision traces.
 
-This repository contains source code and deployment configuration. **It is not a deployed, verified, or audited trading service.** Real testnet trading requires independently verified SDK compatibility, controlled account funding, explicit owner permission and two separate opt-in controls.
+This repository contains source code and deployment configuration. The current Hideki testnet deployments are listed below, but THRYNT is not audited or a managed trading service. Live signing remains disabled until an owner explicitly authorizes a bounded testnet order.
 
 ## Stack
 
@@ -94,12 +94,12 @@ npm run dev:web
 
 Copy `.env.example` into local environment variables; do **not** put real secrets into tracked files. The web UI can run in a disconnected read-only state; it does not fabricate testnet balances or transaction IDs.
 
-1. Apply `supabase/migrations/0001_thrynt.sql`, `0002_account_telemetry.sql`, and `0003_execution_integrity.sql` using the Supabase SQL Editor after checking the project target. Never reset an existing project.
+1. Apply `supabase/migrations/0001_thrynt.sql` through `0004_service_role_grants.sql` using the Supabase CLI or SQL Editor after checking the project target. Never reset an existing project.
 2. Enable email link sign-in in Supabase Auth, authorize the correct redirect domain, sign in once, and set the resulting Supabase Auth user UUID as `TRADER_USER_ID` on Cloudflare.
 3. Deploy the Cloudflare Worker named `thrynt`, setting server-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ENGINE_API_KEY`, and exact `ALLOWED_ORIGIN`.
 4. Deploy the web frontend to Vercel with the public Worker URL and Supabase publishable key.
 5. On DreamDEX Hideki, create/fund the OWNER account with USDso margin, create a separate bot key with STT for gas, then Link a Bot for the required perp pools.
-6. Configure Fly secrets: `THRYNT_API_URL`, `THRYNT_ENGINE_API_KEY`, `OWNER_ADDRESS`, `BOT_PRIVATE_KEY`, and Somnia endpoints.
+6. Configure Fly secrets: `THRYNT_API_URL`, `THRYNT_ENGINE_API_KEY`, `OWNER_ADDRESS`, `PORT`, and the Somnia endpoints. Add `BOT_PRIVATE_KEY` and `EXPECTED_BOT_ADDRESS` only for an explicitly authorized live testnet run; the engine derives the key address and refuses to start live on a mismatch.
 7. Start with `EXECUTION_MODE=observe` and `ENABLE_TESTNET_EXECUTION=false`. Confirm successful event observation, immutable trace creation, account telemetry, snapshots, and restart/recovery.
 8. For a supervised testnet execution only: enable live mode deliberately on Fly **and** explicitly unpause the global engine via the authenticated dashboard. Use a dedicated small-capital account.
 
@@ -110,14 +110,23 @@ Copy `.env.example` into local environment variables; do **not** put real secret
 ```bash
 fly launch --no-deploy
 fly deploy -c apps/engine/fly.toml
-fly scale count 1
+fly scale count 1 -g worker
 ```
 
-Pass the monorepo root as Docker build context. The worker has **no public HTTP port**. The Fly account may require billing even for a small worker; do not assume an indefinite free allowance.
+Pass the monorepo root as Docker build context. The worker exposes only non-secret `/healthz` and `/readyz` endpoints on port 8080 for operational checks; it has no trading API. Keep exactly one active machine because the database lease is the final signing fence. The Fly account may require billing even for a small worker; do not assume an indefinite free allowance.
+
+## Current deployed endpoints
+
+| Component | Endpoint | Observed state |
+|---|---|---|
+| Vercel | https://thrynt.vercel.app | Production deployment READY; public seven-screen dashboard verified in Chrome |
+| Cloudflare Worker | https://thrynt.delealufejoel.workers.dev | `/health` and public telemetry routes respond; owner/engine boundaries reject unauthenticated requests |
+| Fly engine | https://thrynt-engine.fly.dev | One machine in `lhr`, observation-only, `/healthz` ready and `/readyz` ready |
+| Supabase | `qpvgldadpwiipqgynxzd` | Existing `ACTIVE_HEALTHY` project; migrations 0001–0004 and Auth redirect configuration applied |
 
 ## Current verification boundary
 
-The repository has been verified against Hideki RPC/GraphQL and SDK market discovery, but deployment state is intentionally reported separately from source readiness. A successful Worker `/health` response proves only that the Worker is reachable; it does not prove Supabase telemetry or engine execution. Before live signing, verify that the production Supabase project contains all three migrations, configure the Worker secrets, deploy the frontend public variables, and run the observation-only engine. Keep `EXECUTION_MODE=observe` and `ENABLE_TESTNET_EXECUTION=false` until the owner explicitly authorizes the first bounded testnet transaction.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and a direct WebSocket subscription from both the workstation and Fly runtime. The Worker public overview currently reports real engine heartbeat and account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. The linked DreamDEX bot is authorized on BTC-PERP and ETH-PERP by direct chain reads. No Supabase Auth user is currently present, so `TRADER_USER_ID` is intentionally unset and owner mutations remain blocked. Keep `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled until the owner explicitly authorizes the first bounded testnet transaction.
 
 ## Tests and acceptance
 

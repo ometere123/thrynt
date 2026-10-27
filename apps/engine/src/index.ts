@@ -1,7 +1,8 @@
 import {decodeEventLog,formatUnits} from "viem";
+import {createServer,type Server} from "node:http";
 import {perpPoolEventsAbi,orderBookEventsAbi} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
-import {ThryntApi,type StoredStrategy} from "./api.js";
+import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
 import {decide,intentKey,prepareTrade} from "./decision.js";
 import {SomniaPlane} from "./markets.js";
@@ -12,6 +13,8 @@ const api=new ThryntApi(config);
 const plane=new SomniaPlane(config);
 const bot=config.botPrivateKey
   ?new LinkedBot(config.owner,config.botPrivateKey,plane.chain,config.rpc):null;
+if(bot&&config.expectedBotAddress&&bot.address.toLowerCase()!==config.expectedBotAddress.toLowerCase())
+  throw new Error("Derived BOT_PRIVATE_KEY address does not match EXPECTED_BOT_ADDRESS");
 const publicClient=plane.client.getViemClient();
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
@@ -31,6 +34,64 @@ let queue=Promise.resolve();
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
 let restartTimer:ReturnType<typeof setTimeout>|null=null;
+let healthServer:Server|null=null;
+let cachedState:EngineState|null=null;
+let cachedStateAt=0;
+
+function interested(event:Pick<Event,"market"|"kind">) {
+  if(!cachedState||Date.now()-cachedStateAt>30_000)return false;
+  return cachedState.strategies.some(s=>{
+    const selected=rulesFor(s);
+    return selected?.rule.trigger.market===event.market&&selected.rule.trigger.event===event.kind;
+  });
+}
+
+async function refreshState() {
+  const state=await api.state();
+  cachedState=state;
+  cachedStateAt=Date.now();
+  return state;
+}
+
+function healthPayload() {
+  return {
+    ok:true,
+    service:"thrynt-engine",
+    chainId:50383,
+    mode:config.mode,
+    liveOptIn:config.liveOptIn,
+    leased,
+    healthy,
+    feedHealthy,
+    queued,
+    seenBlock,
+  };
+}
+
+async function startHealthServer() {
+  healthServer=createServer((request,response)=>{
+    if(request.method!=="GET"||!request.url||!["/healthz","/readyz"].includes(request.url)) {
+      response.statusCode=404;
+      response.end();
+      return;
+    }
+    const ready=healthy&&leased&&feedHealthy;
+    response.statusCode=request.url==="/readyz"&&!ready?503:200;
+    response.setHeader("content-type","application/json; charset=utf-8");
+    response.setHeader("cache-control","no-store");
+    response.end(JSON.stringify({...healthPayload(),ready}));
+  });
+  await new Promise<void>((resolve,reject)=>{
+    healthServer?.once("error",reject);
+    healthServer?.listen(config.healthPort,"0.0.0.0",()=>resolve());
+  });
+}
+
+async function stopHealthServer() {
+  if(!healthServer)return;
+  await new Promise<void>(resolve=>healthServer?.close(()=>resolve()));
+  healthServer=null;
+}
 
 function rulesFor(s:StoredStrategy):{id:string;rule:Rule}|null {
   const v=s.strategy_versions.find(x=>x.version===s.current_version);
@@ -203,6 +264,12 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
 }
 
 async function processEvent(event:Event) {
+  const state=cachedState;
+  if(!state||Date.now()-cachedStateAt>30_000||
+    !state.strategies.some(s=>{
+      const selected=rulesFor(s);
+      return selected?.rule.trigger.market===event.market&&selected.rule.trigger.event===event.kind;
+    }))return;
   const proof=await publicClient.getTransactionReceipt({hash:event.txHash});
   if(proof.status!=="success"||proof.blockNumber!==event.blockNumber)return;
   const head=await publicClient.getBlockNumber();
@@ -212,15 +279,14 @@ async function processEvent(event:Event) {
     console.warn("Ignoring stale/replayed log",event.id);
     return;
   }
-  const snapshot=await api.state();
   await api.event({
     id:event.id,market:event.market,kind:event.kind,
     blockNumber:event.blockNumber.toString(),txHash:event.txHash,
     logIndex:event.logIndex,observedAt:event.observedAt,
     captured:{source:"somnia-pool-log",receiptStatus:proof.status,head:head.toString()},
   });
-  for(const s of snapshot.strategies) {
-    try {await processStrategy(s,event,snapshot.status);}
+  for(const s of state.strategies) {
+    try {await processStrategy(s,event,state.status);}
     catch(err) {
       console.error("Failed closed for",s.id,event.id,textError(err));
       healthy=false;
@@ -248,6 +314,7 @@ function watchAllPools() {
             observedAt:new Date().toISOString(),
             id:`50383:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
           };
+          if(!interested(event))continue;
           if(queued>=100) {
             healthy=false;feedHealthy=false;console.error("Event queue saturated; live execution halted");
             break;
@@ -355,6 +422,7 @@ async function supervise() {
       leaseGeneration=leased?lease.generation:null;
       if(!leased){healthy=false;console.error("Lost singleton signing lease");}
       else {
+        await refreshState();
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
         healthy=clean && queued<100 && feedHealthy;
@@ -372,7 +440,10 @@ async function main() {
   console.info("THRYNT start",{
     chainId:50383,mode:config.mode,liveOptIn:config.liveOptIn,
     owner:config.owner,botAddress:bot?.address??null,
+    expectedBotAddress:config.expectedBotAddress??null,
   });
+  await startHealthServer();
+  console.info("Health server listening",{port:config.healthPort});
   const actualChain=await publicClient.getChainId();
   if(actualChain!==50383)throw new Error(`Wrong chain ID: ${actualChain}`);
   const symbols=await plane.initialize();
@@ -386,10 +457,18 @@ async function main() {
   console.info("Onchain pool log subscriptions",stopWatchers.length);
   await supervise();
 }
-process.on("SIGTERM",()=>{stopped=true;healthy=false;stopWatchers.forEach(f=>f());});
-process.on("SIGINT",()=>{stopped=true;healthy=false;stopWatchers.forEach(f=>f());});
+async function shutdown(signal:string) {
+  if(stopped)return;
+  stopped=true;healthy=false;stopWatchers.forEach(f=>f());
+  if(restartTimer)clearTimeout(restartTimer);
+  await stopHealthServer();
+  try {await plane.close();} catch(err) {console.error("Shutdown close failed",textError(err));}
+  console.info("THRYNT stopped",{signal});
+}
+process.once("SIGTERM",()=>{void shutdown("SIGTERM");});
+process.once("SIGINT",()=>{void shutdown("SIGINT");});
 main().catch(async err=>{
   console.error("FATAL THRYNT",textError(err));
-  try{await plane.close();}catch{}
+  await shutdown("fatal");
   process.exitCode=1;
 });

@@ -16,18 +16,21 @@ Values below are names and handling rules only. Real secrets must be entered thr
 | `THRYNT_ENGINE_API_KEY` | Fly | No | Yes | Same value as `ENGINE_API_KEY`, entered separately as a Fly secret. |
 | `OWNER_ADDRESS` | Fly | Public identifier | Yes | Full DreamDEX owner/trading wallet address; verify on chain and against linked-bot permissions. |
 | `BOT_PRIVATE_KEY` | Fly | No | Live only | Dedicated bot key; derive its address and compare with DreamDEX linked-bot address before any signing. |
+| `EXPECTED_BOT_ADDRESS` | Fly | Public identifier | Live only | Full public address displayed by DreamDEX for the linked bot; live mode refuses to start on a mismatch. |
 | `SOMNIA_RPC_URL` | Fly/local | Yes | Yes | Hideki RPC; must be HTTPS and resolve to chain 50383. |
 | `SOMNIA_WS_URL` | Fly/local | Yes | Yes | Hideki secure WebSocket endpoint. |
 | `SOMNIA_INDEXER_URL` | Fly/local | Yes | Yes | Hideki GraphQL indexer. |
 | `EXECUTION_MODE` | Fly/local | No | Yes | `observe`, `simulate`, or `live`; default is `observe`. |
 | `ENABLE_TESTNET_EXECUTION` | Fly/local | No | Yes | Must remain `false` until explicit owner authorization; the engine also requires `EXECUTION_MODE=live`. |
 | `ENGINE_INSTANCE_ID` | Fly/local | No | Yes | Stable unique executor identity used by the fenced lease. |
+| `PORT` | Fly/local | No | Optional | Health server port; defaults to `8080` and is the only Fly service port. |
 
-## Deployment status at the last verification
+## Observed deployment status (2026-10-27)
 
-- Vercel project `thrynt` has `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_SUPABASE_URL` configured for production, preview and development. `NEXT_PUBLIC_SUPABASE_ANON_KEY` remains missing and must be added from the authorized Supabase project before browser authentication is expected to work.
-- Cloudflare Worker `thrynt` existed and its health route returned chain 50383, but its secret inventory was empty.
-- The configured Supabase public URL/anon key answered Auth settings, while the local server key was rejected and the application table endpoint returned 404. This means the target schema and server credential must be re-established before telemetry can be called operational.
-- Fly had no `thrynt-engine` application visible to the authenticated account.
+- Vercel project `thrynt` is linked to `ometere123/thrynt`, rooted at `apps/web`, and its production deployment is READY. `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and the matching publishable `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured for production, preview, and development.
+- Cloudflare Worker `thrynt` has `SUPABASE_URL`, the server-only Supabase service key, and a random 32-byte `ENGINE_API_KEY` configured as secrets. Its public overview returns real account/engine telemetry. `TRADER_USER_ID` is intentionally missing until the approved Auth identity exists.
+- Supabase project `qpvgldadpwiipqgynxzd` is `ACTIVE_HEALTHY` in `eu-west-1`. Migrations 0001–0004 are applied, all application tables have RLS enabled, anonymous table access is denied, and the service-role read path is working. Auth site/redirect URLs include `https://thrynt.vercel.app`, `http://localhost:3000`, and `http://127.0.0.1:3000`; no Auth users currently exist.
+- Fly app `thrynt-engine` is deployed with one `lhr` machine, a health server, persistent Hideki pool subscriptions, `OWNER_ADDRESS` set to the verified public owner wallet, and `EXECUTION_MODE=observe`. `BOT_PRIVATE_KEY` is not configured. `/healthz` and `/readyz` report ready after the runtime establishes its lease and feed.
+- Direct chain verification found owner `0xdA80A0D2FBDEF6eEe94e2e27F82a34896B444126`, linked bot `0x94d8333f14a5ED04634F0F5b7200f5c2f1D294F1`, 15 STT owner gas, 5 STT bot gas, a 1,000 USDso-equivalent voucher margin account, and place/cancel/reduce authorization on BTC-PERP and ETH-PERP. These are public testnet reads; balances can change.
 
-Do not enable live mode or submit a testnet order until this inventory is populated and independently verified.
+Do not enable live mode or submit a testnet order until an approved Auth identity exists, the dedicated bot key is entered through Fly secrets, its derived address is compared with the linked public bot address, global pause is deliberately cleared, and the owner authorizes the exact preflight.
