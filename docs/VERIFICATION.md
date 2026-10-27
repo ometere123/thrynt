@@ -7,7 +7,7 @@ items remain intentionally blocked or require the first owner-authorized order.
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-27. npm reported development-only advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
 - [x] The latest clean local run passed `npm run typecheck`, `npm test` (14 core + 7 engine tests), `npm run build`, `npm run test:e2e` (6 passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit.
-- [x] GitHub Actions run [40521972700](https://github.com/ometere123/thrynt/actions/runs/40521972700) passed for commit `026c53ecec70ee4e7eb04090ecb9f6dc638b731d`, including the short-notional safety fix, expanded tests and production build.
+- [x] GitHub Actions run [40522732059](https://github.com/ometere123/thrynt/actions/runs/40522732059) passed for commit `9ce78fcbd4a4da3972bcce7a3db99fc5bc4cfff9`, including the short-notional safety fix, expanded tests and production build.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
 - [x] Worker denies anonymous and malformed trader authentication; the approved production session completed owner writes through the explicit `TRADER_USER_ID` allowlist. A separate valid JWT for an unapproved identity was not created solely for testing.
