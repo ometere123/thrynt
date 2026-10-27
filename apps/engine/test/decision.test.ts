@@ -1,5 +1,6 @@
 import {describe,expect,it} from "vitest";
 import {templates} from "@thrynt/core";
+import {parseUnits} from "viem";
 import {intentKey,prepareTrade} from "../src/decision.js";
 
 describe("order preparation",()=>{
@@ -25,5 +26,23 @@ describe("order preparation",()=>{
     const rule=templates()[0]!;
     rule.action={kind:"reduce",market:"ETH",percent:50,slippageBps:10};
     expect(()=>prepareTrade(rule,input,info,0n)).toThrow("Nothing to reduce");
+  });
+  it("uses the fresh best bid as a side-aware short execution floor",()=>{
+    const book={blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:parseUnits("4001",18)};
+    const p=prepareTrade(templates()[0]!,input,info,0n,book);
+    expect(p.price).toBeLessThanOrEqual(book.bestBid);
+    expect(p.notionalUsd).toBeCloseTo(0.004*3994,8);
+  });
+  it("uses the fresh best ask as a side-aware long execution ceiling",()=>{
+    const rule=structuredClone(templates()[0]!);
+    if(rule.action.kind!=="trade")throw new Error("expected trade template");
+    rule.action.side="long";
+    const book={blockNumber:99n,bestBid:parseUnits("3999",18),bestAsk:parseUnits("4000",18)};
+    const p=prepareTrade(rule,input,info,0n,book);
+    expect(p.price).toBeGreaterThanOrEqual(book.bestAsk);
+  });
+  it("fails closed when the executable side of the book is empty",()=>{
+    const book={blockNumber:99n,bestBid:null,bestAsk:parseUnits("4001",18)};
+    expect(()=>prepareTrade(templates()[0]!,input,info,0n,book)).toThrow("No executable short side");
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import {useCallback,useEffect,useMemo,useState} from "react";
+import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 import {
   Activity,ArrowDownRight,ArrowRight,ArrowUpRight,Ban,BarChart3,
   Bell,Bot,Check,CheckCircle2,ChevronDown,ChevronRight,CircleAlert,
@@ -95,6 +95,8 @@ export function ControlRoom() {
   const [overview,setOverview]=useState<Overview|null>(null);
   const [traces,setTraces]=useState<Trace[]>([]);
   const [fetchError,setFetchError]=useState<string|null>(null);
+  const [authUserId,setAuthUserId]=useState<string|null>(null);
+  const [authRevision,setAuthRevision]=useState(0);
   const [trader,setTrader]=useState<string|null>(null);
   const [ownerAuthorized,setOwnerAuthorized]=useState(false);
   const [email,setEmail]=useState("");
@@ -107,6 +109,8 @@ export function ControlRoom() {
   const [simulationStored,setSimulationStored]=useState(false);
   const [busy,setBusy]=useState(false);
   const [notice,setNotice]=useState<{message:string;error:boolean}|null>(null);
+  const authUserIdRef=useRef<string|null>(null);
+  const ownerRequestRef=useRef(0);
 
   const report=useMemo(()=>draft?validateRule(draft):null,[draft]);
   const update=(change:(current:Rule)=>Rule)=>{
@@ -126,10 +130,13 @@ export function ControlRoom() {
     }catch(err){setFetchError(err instanceof Error?err.message:"Network unavailable");}
   },[]);
   const loadOwner=useCallback(async()=>{
+    const request=++ownerRequestRef.current;
     try {
       const data=await ownerGet<{strategies:StrategyRow[]}>("/v1/owner/strategies");
+      if(request!==ownerRequestRef.current)return;
       setStrategies(data.strategies??[]);setOwnerAuthorized(true);
     }catch(err){
+      if(request!==ownerRequestRef.current)return;
       setStrategies([]);setOwnerAuthorized(false);
       if(!(err instanceof ApiRequestError&&err.status===401))
         toast(err instanceof Error?err.message:"Unable to load your strategies",true);
@@ -142,16 +149,31 @@ export function ControlRoom() {
     const interval=setInterval(()=>void loadPublic(),15000);
     const auth=authClient();
     if(!auth)return()=>clearInterval(interval);
+    let disposed=false;
+    const applyUser=(user:{id:string;email?:string|null}|null)=>{
+      if(disposed)return;
+      const previous=authUserIdRef.current;
+      authUserIdRef.current=user?.id??null;
+      ownerRequestRef.current++;
+      setAuthUserId(user?.id??null);
+      setTrader(user?.email??null);
+      setAuthRevision(current=>current+1);
+      if(!user|| (previous!==null&&previous!==user.id)){
+        setOwnerAuthorized(false);setStrategies([]);setSavedId(null);
+      }
+    };
     void auth.auth.getUser().then(({data})=>{
-      setTrader(data.user?.email??null);
-      if(!data.user)setOwnerAuthorized(false);
+      applyUser(data.user);
     });
     const {data:listener}=auth.auth.onAuthStateChange((_event,session)=>{
-      setTrader(session?.user.email??null);setOwnerAuthorized(false);
+      applyUser(session?.user??null);
     });
-    return()=>{clearInterval(interval);listener.subscription.unsubscribe();};
+    return()=>{disposed=true;ownerRequestRef.current++;clearInterval(interval);listener.subscription.unsubscribe();};
   },[loadPublic]);
-  useEffect(()=>{if(trader)void loadOwner();else {setStrategies([]);setOwnerAuthorized(false);}},[trader,loadOwner]);
+  useEffect(()=>{
+    if(authUserId)void loadOwner();
+    else {setStrategies([]);setOwnerAuthorized(false);}
+  },[authUserId,authRevision,loadOwner]);
   const latestMarkets=overview?.markets??[];
   const market=(code:Market)=>latestMarkets.find(m=>m.symbol===code);
   const status=overview?.engine;
@@ -240,7 +262,12 @@ export function ControlRoom() {
     setAuthMessage(error?error.message:"Check your email for the login link. Only the approved account can manage strategies.");
     setBusy(false);
   };
-  const logout=async()=>{await authClient()?.auth.signOut();setTrader(null);setOwnerAuthorized(false);setSavedId(null);};
+  const logout=async()=>{
+    ownerRequestRef.current++;
+    await authClient()?.auth.signOut();
+    authUserIdRef.current=null;
+    setAuthUserId(null);setTrader(null);setOwnerAuthorized(false);setSavedId(null);
+  };
 
   return <div className="shell">
     <aside className={`sidebar ${mobile?"sidebar-mobile":""}`}>
@@ -509,7 +536,7 @@ export function ControlRoom() {
                   <Play size={16}/> Simulate conditions</button>
                 <button className="button button-primary full" disabled={!ownerAuthorized||!savedId||dirty||!simulationStored||busy}
                   onClick={arm}><Zap size={16}/> ARM STRATEGY</button>
-                {!ownerAuthorized&&<p className="small-note">{trader?"This signed-in identity is not approved for owner controls yet.":"Sign in as the approved trader under Settings to save or arm a rule."}</p>}
+                {!ownerAuthorized&&<p className="small-note">{authUserId?"This signed-in identity is not approved for owner controls yet.":"Sign in as the approved trader under Settings to save or arm a rule."}</p>}
                 {simulation&&<div className="simulation-result">
                   <div className="sim-top"><strong>SIMULATION</strong>
                     <Pill tone={simulation.matched?"green":"amber"}>{simulation.matched?"MATCH":"SKIP"}</Pill></div>
@@ -601,8 +628,8 @@ export function ControlRoom() {
         </Panel>}
         {tab==="Settings"&&<div className="two-column">
           <Panel title="Trader authentication" subtitle="Supabase Auth and an owner-user allowlist">
-            {trader?<div className="signed-in"><span className="signed-icon"><Check size={20}/></span>
-              <div><strong>Signed in</strong><p>{trader}</p><p className="small-note">{ownerAuthorized?"Approved owner controls active":"Authenticated, but not approved for owner controls"}</p></div>
+            {authUserId?<div className="signed-in"><span className="signed-icon"><Check size={20}/></span>
+              <div><strong>Signed in</strong><p>{trader??"Authenticated session"}</p><p className="small-note">{ownerAuthorized?"Approved owner controls active":"Authenticated, but not approved for owner controls"}</p></div>
               <button className="button button-outline" onClick={logout}>Sign out</button></div>:
               <div className="auth-form"><label className="field"><span>Authorized trader email</span>
                 <input placeholder="your@email.com" type="email" value={email} onChange={e=>setEmail(e.target.value)}/></label>

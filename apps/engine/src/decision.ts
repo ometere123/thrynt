@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto";
-import {parseUnits} from "viem";
+import {formatUnits,parseUnits} from "viem";
 import {checkRisk,evaluate,validateRule,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
-import type {MarketInfo} from "./markets.js";
+import type {MarketInfo,OrderBookTop} from "./markets.js";
 
 export function intentKey(version:string,eventId:string,action:unknown) {
   return createHash("sha256").update(JSON.stringify([version,eventId,action])).digest("hex");
@@ -12,7 +12,7 @@ export interface PreparedOrder {
 }
 export function prepareTrade(
   rule:Rule,snapshot:MetricSnapshot,info:MarketInfo,
-  reduciblePosition=0n,
+  reduciblePosition=0n,book?:OrderBookTop,
 ):PreparedOrder {
   const action=rule.action;
   if(action.kind!=="trade"&&action.kind!=="reduce")throw new Error("No exchange order action");
@@ -33,7 +33,12 @@ export function prepareTrade(
   quantity=quantity/info.lotSize*info.lotSize;
   if(quantity<info.minQuantity)throw new Error("Quantity below market minimum");
   const slip=action.slippageBps;
-  const reference=parseUnits(snapshot.markUsd.toFixed(8),18);
+  // Production callers pass a fresh onchain top-of-book. The mark fallback is
+  // retained only for deterministic local previews and unit fixtures; the live
+  // engine rejects a missing book before it can reach this function.
+  const executable=side==="long"?book?.bestAsk:book?.bestBid;
+  if(book&&executable===null)throw new Error(`No executable ${side} side in the order book`);
+  const reference=executable??parseUnits(snapshot.markUsd.toFixed(8),info.quoteDecimals);
   const raw=side==="long"
     ? reference*BigInt(10_000+slip)/10_000n
     : reference*BigInt(10_000-slip)/10_000n;
@@ -41,7 +46,7 @@ export function prepareTrade(
     ? ((raw+info.tickSize-1n)/info.tickSize)*info.tickSize
     : (raw/info.tickSize)*info.tickSize;
   if(price<=0n)throw new Error("Order price invalid");
-  const notionalUsd=Number(quantity)/10**info.baseDecimals*snapshot.markUsd;
+  const notionalUsd=Number(quantity)/10**info.baseDecimals*Number(formatUnits(price,info.quoteDecimals));
   if(!Number.isFinite(notionalUsd)||notionalUsd<=0)throw new Error("Invalid trade notional");
   return {market:action.market,side,quantity,price,notionalUsd,
     orderType:action.kind==="trade"&&action.orderType==="POST_ONLY"?3:2};

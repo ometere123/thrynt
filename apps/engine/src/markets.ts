@@ -12,6 +12,11 @@ export interface MarketInfo {
   baseDecimals:number;quoteDecimals:number;
   tickSize:bigint;lotSize:bigint;minQuantity:bigint;
 }
+export interface OrderBookTop {
+  blockNumber:bigint;
+  bestBid:bigint|null;
+  bestAsk:bigint|null;
+}
 export function numberRaw(raw:bigint|string,decimals:number):number {
   return Number(formatUnits(BigInt(raw),decimals));
 }
@@ -55,6 +60,18 @@ export class SomniaPlane {
     const market=this.marketMap.get(symbol);
     if(!market)throw new Error(`Perp market ${symbol} not available on Hideki`);
     return market;
+  }
+  async topOfBook(symbol:Market):Promise<OrderBookTop> {
+    const market=this.info(symbol);
+    const result=await this.sdk.client.getBookTopsOnchain([{
+      id:symbol,poolAddress:market.poolAddress,
+    }]);
+    const top=result.tops[symbol.toLowerCase()];
+    return {
+      blockNumber:result.blockNumber,
+      bestBid:top?.bestBid?BigInt(top.bestBid):null,
+      bestAsk:top?.bestAsk?BigInt(top.bestAsk):null,
+    };
   }
   pools(){return [...this.marketMap.values()];}
   async sample(symbol:Market):Promise<MetricSnapshot> {

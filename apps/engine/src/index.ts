@@ -168,8 +168,26 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   if(!snap)throw new Error("Action market snapshot unavailable");
   const market=plane.info(action.market);
   const position=action.kind==="reduce"?await plane.reducible(action.market):0n;
+  let book;
+  try {book=await plane.topOfBook(action.market);}
+  catch(err) {
+    await record(s,versionId,event,"blocked",evaluation,{
+      blockedBy:["BOOK_UNAVAILABLE"],details:textError(err).slice(0,220),
+    });
+    return;
+  }
+  const requestedSide=action.kind==="trade"?action.side:(position>=0n?"short":"long");
+  if((action.kind==="trade"||action.kind==="reduce")&&
+    (requestedSide==="long"?!book.bestAsk:!book.bestBid)) {
+    await record(s,versionId,event,"blocked",evaluation,{
+      blockedBy:["BOOK_UNAVAILABLE"],
+      details:"No executable top-of-book liquidity for the requested side",
+      bookBlock:book.blockNumber.toString(),
+    });
+    return;
+  }
   let order;
-  try {order=prepareTrade(rule,snap,market,position);}
+  try {order=prepareTrade(rule,snap,market,position,book);}
   catch(err) {
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["SIZE_INVALID"],detail:textError(err)});
     return;
@@ -199,6 +217,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   ]);
   const now=Date.now();
   const oldest=Math.min(...snaps.map(x=>Date.parse(x.observedAt)));
+  const bookEvidence={blockNumber:book.blockNumber.toString(),bestBid:book.bestBid?.toString()??null,bestAsk:book.bestAsk?.toString()??null};
   const risk=checkRisk(rule,{
     nowMs:now,armed:s.state==="armed",engineHealthy:healthy&&leased,
     marketObservedAtMs:oldest,linkedBotPermission:permission,
@@ -211,7 +230,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   });
   if(!risk.allowed) {
     await record(s,versionId,event,"blocked",evaluation,{
-      blockedBy:risk.blockedBy,protocolLimit:sizing.priceable?sizing.limitedBy??null:"unpriceable",
+      blockedBy:risk.blockedBy,protocolLimit:sizing.priceable?sizing.limitedBy??null:"unpriceable",book:bookEvidence,
     });
     return;
   }
@@ -219,7 +238,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     await record(s,versionId,event,"observed",evaluation,{
       blockedBy:[],mode:config.mode,liveOptIn:config.liveOptIn,
       proposed:{market:action.market,side:order.side,quantity:order.quantity.toString(),
-        price:order.price.toString(),notionalUsd:order.notionalUsd},
+        price:order.price.toString(),notionalUsd:order.notionalUsd},book:bookEvidence,
       note:"Observed only. No signed transaction was submitted.",
     });
     return;
@@ -242,7 +261,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["PAUSED"]});
     return;
   }
-  const intent=await record(s,versionId,event,"observed",evaluation,{blockedBy:[],protocolSizing:"passed"});
+  const intent=await record(s,versionId,event,"observed",evaluation,{blockedBy:[],protocolSizing:"passed",book:bookEvidence});
   if(!intent.created)return; // No second order on an already-evaluated event.
   const key=intentKey(versionId,event.id,action);
   const reserved=await api.reserve({
