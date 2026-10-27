@@ -81,6 +81,14 @@ const defaultTradeQuantities:Record<Market,string>={
   BTC:"0.00013",ETH:"0.004",SOL:"0.1",XRP:"6.9",DOGE:"120",
 };
 const cmpLabels={gt:">",gte:"≥",lt:"<",lte:"≤",eq:"="};
+const utcDateTimeInput=(iso:string)=>{
+  const date=new Date(iso);
+  return Number.isFinite(date.getTime())?date.toISOString().slice(0,16):"";
+};
+const parseUtcDateTimeInput=(value:string)=>{
+  const timestamp=Date.parse(`${value}:00.000Z`);
+  return Number.isFinite(timestamp)?new Date(timestamp).toISOString():null;
+};
 const simulated=(market:Market):MetricSnapshot=>({
   market,observedAt:new Date().toISOString(),blockNumber:"0",
   markUsd:market==="BTC"?110000:market==="ETH"?4000:180,
@@ -507,8 +515,10 @@ export function ControlRoom() {
                     <input type="number" min={0} value={draft.limits[key]} onChange={e=>update(r=>{
                       r.limits[key]=Number(e.target.value);return r;})}/></label>)}
                   <label className="field field-wide"><span>Expiry (UTC)</span><input type="datetime-local"
-                    value={draft.limits.expiresAt.slice(0,16)}
-                    onChange={e=>update(r=>{const n=Date.parse(e.target.value);if(Number.isFinite(n))r.limits.expiresAt=new Date(n).toISOString();return r;})}/></label>
+                    value={utcDateTimeInput(draft.limits.expiresAt)}
+                    onChange={e=>{const iso=parseUtcDateTimeInput(e.currentTarget.value);if(iso)update(r=>{r.limits.expiresAt=iso;return r;});}}
+                    onInput={e=>{const iso=parseUtcDateTimeInput(e.currentTarget.value);if(iso)update(r=>{r.limits.expiresAt=iso;return r;});}}
+                    onBlur={e=>{const iso=parseUtcDateTimeInput(e.currentTarget.value);if(iso)update(r=>{r.limits.expiresAt=iso;return r;});}}/></label>
                 </div>
                 <div className="guard-tags">{["Fresh chain state","Authorized bot","Tick / lot","Cross-margin","Onchain sizing","Lease held","Deduplicate","No auto-retry"].map(tag=>
                   <span key={tag}><Check size={12}/>{tag}</span>)}</div>
