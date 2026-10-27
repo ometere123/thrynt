@@ -29,6 +29,8 @@ const publicClient=createPublicClient({
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
 const acceptableEvents=new Set(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]);
+const rawMaxCatchupBlocks=128n;
+const maxEventLagBlocks=32n;
 const observedPoolAbi=[...perpPoolEventsAbi,...orderBookEventsAbi] as const;
 type Event={
   id:string;market:Market;kind:"FundingUpdated"|"OpenInterestUpdated"|"OrderPlaced";
@@ -354,7 +356,7 @@ async function processEvent(event:Event) {
   const head=await publicClient.getBlockNumber();
   seenBlock=head.toString();
   // Do not execute events replayed far behind head after a reconnect.
-  if(head-event.blockNumber>3n) {
+  if(head-event.blockNumber>maxEventLagBlocks) {
     console.warn("Ignoring stale/replayed log",event.id);
     return;
   }
@@ -405,20 +407,23 @@ async function pollRawLogs() {
     const head=await publicClient.getBlockNumber();
     if(rawNextBlock===null)rawNextBlock=head;
     if(head>=rawNextBlock) {
-      if(head-rawNextBlock>3n) {
+      if(head-rawNextBlock>rawMaxCatchupBlocks) {
         rawSuspended=true;rawFeedHealthy=false;feedHealthy=false;
         console.error("Event recovery gap exceeds safe replay window; live execution remains suspended",{
           from:rawNextBlock.toString(),to:head.toString(),
         });
         return;
       }
-      for(const market of plane.pools()) {
-        const logs=await publicClient.getLogs({
-          address:market.poolAddress,
-          fromBlock:rawNextBlock,
-          toBlock:head,
-        });
-        for(const log of logs)enqueueRawLog(market,log);
+      const markets=plane.pools();
+      const byPool=new Map(markets.map(m=>[m.poolAddress.toLowerCase(),m]));
+      const logs=await publicClient.getLogs({
+        address:markets.map(m=>m.poolAddress),
+        fromBlock:rawNextBlock,
+        toBlock:head,
+      });
+      for(const log of logs) {
+        const market=byPool.get(log.address.toLowerCase());
+        if(market)enqueueRawLog(market,log);
       }
       rawNextBlock=head+1n;
     }
