@@ -1,6 +1,6 @@
 import {decodeEventLog,formatUnits} from "viem";
 import {createServer,type Server} from "node:http";
-import {perpPoolEventsAbi,orderBookEventsAbi} from "@somnia-chain/markets-sdk";
+import {perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
 import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
@@ -28,11 +28,17 @@ let stopped=false;
 let leased=false;
 let leaseGeneration:string|null=null;
 let healthy=false;
-let feedHealthy=true;
+let feedHealthy=false;
+let rawFeedHealthy=true;
+let sdkFeedHealthy=false;
+let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
 let queue=Promise.resolve();
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
+const sdkWatchers:{stop:()=>void}[]=[];
+let sdkPerpWatcher:{stop:()=>void}|null=null;
+let sdkLiveUnsubscribe:(()=>void)|null=null;
 let restartTimer:ReturnType<typeof setTimeout>|null=null;
 let healthServer:Server|null=null;
 let cachedState:EngineState|null=null;
@@ -63,6 +69,17 @@ function healthPayload() {
     leased,
     healthy,
     feedHealthy,
+    rawFeedHealthy,
+    sdkFeedHealthy,
+    sdkTail:sdkTail?{
+      mode:sdkTail.mode,
+      wsConnected:sdkTail.wsConnected,
+      watchCount:sdkTail.watchCount,
+      lastBlock:sdkTail.lastBlock,
+      headBlock:sdkTail.headBlock,
+      healedGaps:sdkTail.healedGaps,
+      failure:Boolean(sdkTail.failure),
+    }:null,
     queued,
     seenBlock,
   };
@@ -326,7 +343,7 @@ function watchAllPools() {
         }
       },
       onError:error=>{
-        healthy=false;feedHealthy=false;
+        healthy=false;rawFeedHealthy=false;feedHealthy=false;
         console.error("WS stream unhealthy; restart after verifying chain recovery",textError(error));
         if(!restartTimer&&!stopped) {
           restartTimer=setTimeout(async()=>{
@@ -337,7 +354,7 @@ function watchAllPools() {
                 console.error("Event recovery gap exceeds safe replay window; live execution remains suspended",{from:seenBlock,to:head.toString()});
                 return;
               }
-              watchAllPools();feedHealthy=true;
+              watchAllPools();rawFeedHealthy=true;refreshFeedHealth();
               console.info("Somnia event subscriptions restarted after a bounded gap");
             } catch(err) {console.error("Event subscription recovery failed",textError(err));}
           },5_000);
@@ -346,6 +363,45 @@ function watchAllPools() {
     });
     stopWatchers.push(stop);
   }
+}
+
+function refreshFeedHealth() {
+  try {
+    sdkTail=plane.client.getLiveStatus();
+    const poolsReady=plane.pools().every(m=>plane.client.getWatchStatus(m.poolAddress)==="live");
+    const perpReady=plane.client.getPerpPlaneStatus()==="live";
+    sdkFeedHealthy=sdkTail.mode==="tailing"&&sdkTail.wsConnected&&
+      !sdkTail.failure&&poolsReady&&perpReady;
+  } catch(err) {
+    sdkFeedHealthy=false;
+    console.error("SDK live-tail health read failed",textError(err));
+  }
+  feedHealthy=rawFeedHealthy&&sdkFeedHealthy;
+}
+
+async function startSdkFeed() {
+  try {
+    const handles=await Promise.all(plane.pools().map(m=>plane.client.watchMarket(m.poolAddress)));
+    sdkWatchers.push(...handles);
+    sdkPerpWatcher=await plane.client.watchPerpMarkets({marginBank:plane.info("BTC").marginBank});
+    sdkLiveUnsubscribe=plane.client.subscribeLive(()=>refreshFeedHealth());
+    refreshFeedHealth();
+    if(!sdkFeedHealthy)throw new Error("Somnia SDK live tail did not reach a healthy state");
+  } catch(err) {
+    stopSdkFeed();
+    throw err;
+  }
+}
+
+function stopSdkFeed() {
+  sdkLiveUnsubscribe?.();
+  sdkLiveUnsubscribe=null;
+  sdkPerpWatcher?.stop();
+  sdkPerpWatcher=null;
+  while(sdkWatchers.length)sdkWatchers.pop()?.stop();
+  try {plane.client.stopLive();} catch(err) {console.error("SDK live-tail shutdown failed",textError(err));}
+  sdkFeedHealthy=false;
+  feedHealthy=false;
 }
 
 async function reconcileUnresolved() {
@@ -434,6 +490,7 @@ async function supervise() {
         await refreshState();
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
+        refreshFeedHealth();
         healthy=clean && queued<100 && feedHealthy;
         await publishMarkets();
         await publishAccount();
@@ -463,6 +520,12 @@ async function main() {
   leaseGeneration=leased?lease.generation:null;
   if(!leased)throw new Error("Another engine instance holds the lease");
   healthy=await reconcileUnresolved();
+  await startSdkFeed();
+  console.info("Somnia SDK live-tail subscriptions",{
+    markets:plane.pools().length,
+    perpPlane:plane.client.getPerpPlaneStatus(),
+    status:plane.client.getLiveStatus(),
+  });
   watchAllPools();
   console.info("Onchain pool log subscriptions",stopWatchers.length);
   await supervise();
@@ -470,6 +533,7 @@ async function main() {
 async function shutdown(signal:string) {
   if(stopped)return;
   stopped=true;healthy=false;stopWatchers.forEach(f=>f());
+  stopSdkFeed();
   if(restartTimer)clearTimeout(restartTimer);
   await stopHealthServer();
   try {await plane.close();} catch(err) {console.error("Shutdown close failed",textError(err));}
