@@ -5,7 +5,12 @@ const apiBase=process.env.THRYNT_E2E_API_URL??"https://thrynt.delealufejoel.work
 
 async function openScreen(page:Page,name:string) {
   const nav=page.getByRole("button",{name,exact:true});
-  if(!(await nav.isVisible()))await page.getByRole("button",{name:"Open navigation",exact:true}).click();
+  const openNavigation=page.getByRole("button",{name:"Open navigation",exact:true});
+  // On narrow viewports the sidebar button can remain visibility-true while
+  // its drawer is translated off-canvas. Open the drawer explicitly before
+  // interacting with any navigation item.
+  if(await openNavigation.isVisible())await openNavigation.click();
+  await nav.scrollIntoViewIfNeeded();
   await nav.click();
   await expect(page.getByRole("heading",{name,exact:true})).toBeVisible();
 }
