@@ -174,6 +174,17 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["SIZE_INVALID"],detail:textError(err)});
     return;
   }
+  if(config.authorizedMaxPriceUsd!==undefined) {
+    const orderPriceUsd=Number(formatUnits(order.price,market.quoteDecimals));
+    if(!Number.isFinite(orderPriceUsd)||orderPriceUsd>config.authorizedMaxPriceUsd) {
+      await record(s,versionId,event,"blocked",evaluation,{
+        blockedBy:["AUTHORIZED_PRICE_CAP"],orderPriceUsd,
+        authorizedMaxPriceUsd:config.authorizedMaxPriceUsd,
+        note:"Temporary per-order authorization cap rejected this prepared price",
+      });
+      return;
+    }
+  }
 
   // All decisions use fresh cross-margin state from the bank, plus protocol-side sizing.
   const [account,exposure,permission,activity,sizing]=await Promise.all([

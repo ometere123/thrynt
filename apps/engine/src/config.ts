@@ -4,7 +4,8 @@ export interface EngineConfig {
   apiUrl:string;apiKey:string;instance:string;owner:`0x${string}`;
   botPrivateKey?:`0x${string}`;expectedBotAddress?:`0x${string}`;
   mode:"observe"|"simulate"|"live";
-  liveOptIn:boolean;rpc:string;ws:string;indexer:string;healthPort:number;
+  liveOptIn:boolean;authorizedMaxPriceUsd?:number;
+  rpc:string;ws:string;indexer:string;healthPort:number;
 }
 export function configFromEnv(env:NodeJS.ProcessEnv=process.env):EngineConfig {
   const apiUrl=env.THRYNT_API_URL?.trim()??"";
@@ -25,6 +26,14 @@ export function configFromEnv(env:NodeJS.ProcessEnv=process.env):EngineConfig {
     throw new Error("EXPECTED_BOT_ADDRESS must be a valid public address");
   if(mode==="live"&&!expectedBotAddress)
     throw new Error("Live mode requires EXPECTED_BOT_ADDRESS for linked-bot verification");
+  const maxPriceRaw=env.THRYNT_AUTHORIZED_MAX_PRICE_USD?.trim();
+  let authorizedMaxPriceUsd:number|undefined;
+  if(maxPriceRaw) {
+    const parsed=Number(maxPriceRaw);
+    if(!Number.isFinite(parsed)||parsed<=0)
+      throw new Error("THRYNT_AUTHORIZED_MAX_PRICE_USD must be a positive finite number");
+    authorizedMaxPriceUsd=parsed;
+  }
   const rpc=env.SOMNIA_RPC_URL??"https://api.hideki2.infra.testnet.somnia.network";
   const ws=env.SOMNIA_WS_URL??"wss://api.hideki2.infra.testnet.somnia.network/ws";
   if(!rpc.startsWith("https://"))throw new Error("Somnia RPC must be HTTPS");
@@ -38,7 +47,7 @@ export function configFromEnv(env:NodeJS.ProcessEnv=process.env):EngineConfig {
     botPrivateKey:privateKey as `0x${string}`|undefined,
     expectedBotAddress:expectedBotAddress?getAddress(expectedBotAddress):undefined,
     mode:mode as EngineConfig["mode"],
-    liveOptIn:env.ENABLE_TESTNET_EXECUTION==="true",
+    liveOptIn:env.ENABLE_TESTNET_EXECUTION==="true",authorizedMaxPriceUsd,
     rpc,ws,indexer:env.SOMNIA_INDEXER_URL??"https://hideki-dev.smk.somnia.host/v1/graphql",healthPort,
   };
 }
