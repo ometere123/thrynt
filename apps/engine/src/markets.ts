@@ -1,9 +1,12 @@
 import {
   SomniaMarkets,SOMNIA_HIDEKI_TESTNET_ADDRESSES,
-  type PerpMarket as SdkPerpMarket,
+  type BookTopsOnchain,type MarginAccount,type OnchainOrder,
+  type PerpFeedStatus,type PerpHealthSnapshot,type PerpMaxOrderSize,
+  type PerpPosition,type PerpPositionRef,type PerpStateOnchain,
 } from "@somnia-chain/markets-sdk";
 import {hidekiTestnet} from "@somnia-chain/markets-sdk/chains";
-import {formatUnits} from "viem";
+import {createPublicClient,formatUnits,http} from "viem";
+import type {PublicClient} from "viem";
 import type {Market,MetricSnapshot} from "@thrynt/core";
 import type {EngineConfig} from "./config.js";
 
@@ -29,13 +32,55 @@ export function upToGrid(value:bigint,step:bigint):bigint {
   return ((value+step-1n)/step)*step;
 }
 
+type SdkHttpReads={
+  getBookTopsOnchain:(markets:{id:string;poolAddress:`0x${string}`}[],client:PublicClient)=>Promise<BookTopsOnchain>;
+  getOrderOnchain:(pool:`0x${string}`,orderId:bigint,client:PublicClient)=>Promise<OnchainOrder|null>;
+  getMarginAccount:(marginBank:`0x${string}`,account:`0x${string}`,client:PublicClient)=>Promise<MarginAccount>;
+  getMaxPerpOrderSize:(params:{
+    pool:`0x${string}`;marginBank:`0x${string}`;account:`0x${string}`;
+    isBid:boolean;price:bigint;autoPull?:boolean;builderFeeBpsTimes1k?:bigint;
+  },client:PublicClient)=>Promise<PerpMaxOrderSize>;
+  getPerpHealthSnapshot:(pool:`0x${string}`,client:PublicClient)=>Promise<PerpHealthSnapshot>;
+  getPerpState:(pool:`0x${string}`,client:PublicClient)=>Promise<PerpStateOnchain>;
+  getPerpFeedStatus:(pool:`0x${string}`,client:PublicClient)=>Promise<PerpFeedStatus>;
+  getPerpPosition:(ref:PerpPositionRef,client:PublicClient)=>Promise<PerpPosition>;
+};
+
+// 0.32.1 keeps these connection-scoped helpers private to the SDK barrel.
+// Load the pinned installed artifact rather than copying its ABI/decoding code.
+// The production image preserves the monorepo node_modules layout.
+const sdkDist=new URL("../../../node_modules/@somnia-chain/markets-sdk/dist/",import.meta.url);
+const sdkHttpReads:Promise<SdkHttpReads>=Promise.all([
+  import(new URL("./orders.js",sdkDist).href),
+  import(new URL("./perp/margin.js",sdkDist).href),
+  import(new URL("./perp/state.js",sdkDist).href),
+]).then(([orders,margin,state])=>({
+  getBookTopsOnchain:orders.getBookTopsOnchain,
+  getOrderOnchain:orders.getOrderOnchain,
+  getMarginAccount:margin.getMarginAccount,
+  getMaxPerpOrderSize:margin.getMaxPerpOrderSize,
+  getPerpHealthSnapshot:margin.getPerpHealthSnapshot,
+  getPerpState:state.getPerpState,
+  getPerpFeedStatus:state.getPerpFeedStatus,
+  getPerpPosition:state.getPerpPosition,
+} as SdkHttpReads));
+
 export class SomniaPlane {
   readonly sdk:SomniaMarkets;
+  readonly httpClient:PublicClient;
   private marketMap=new Map<Market,MarketInfo>();
   constructor(private readonly config:EngineConfig) {
     this.sdk=new SomniaMarkets({
       chain:hidekiTestnet,wsRpcUrl:config.ws,indexerUrl:config.indexer,
       addresses:SOMNIA_HIDEKI_TESTNET_ADDRESSES,account:config.owner,
+    });
+    // Hideki can keep live subscriptions connected while WebSocket chain
+    // reads time out. Keep the feed on the SDK's WS transport, but use the
+    // configured HTTP RPC for authoritative snapshots. HTTP failures throw.
+    this.httpClient=createPublicClient({
+      chain:hidekiTestnet,
+      transport:http(config.rpc,{timeout:15_000}),
+      pollingInterval:2_000,
     });
   }
   get chain(){return hidekiTestnet;}
@@ -63,9 +108,10 @@ export class SomniaPlane {
   }
   async topOfBook(symbol:Market):Promise<OrderBookTop> {
     const market=this.info(symbol);
-    const result=await this.sdk.client.getBookTopsOnchain([{
+    const reads=await sdkHttpReads;
+    const result=await reads.getBookTopsOnchain([{
       id:symbol,poolAddress:market.poolAddress,
-    }]);
+    }],this.httpClient);
     const top=result.tops[symbol.toLowerCase()];
     return {
       blockNumber:result.blockNumber,
@@ -76,12 +122,13 @@ export class SomniaPlane {
   pools(){return [...this.marketMap.values()];}
   async sample(symbol:Market):Promise<MetricSnapshot> {
     const market=this.info(symbol);
+    const reads=await sdkHttpReads;
     const [health,state,account,feed,block]=await Promise.all([
-      this.sdk.client.getPerpHealthSnapshot(market.poolAddress),
-      this.sdk.client.getPerpState(market.poolAddress),
-      this.sdk.client.getMarginAccount(market.marginBank,this.config.owner),
-      this.sdk.client.getPerpFeedStatus(market.poolAddress),
-      this.sdk.client.getViemClient().getBlockNumber(),
+      reads.getPerpHealthSnapshot(market.poolAddress,this.httpClient),
+      reads.getPerpState(market.poolAddress,this.httpClient),
+      reads.getMarginAccount(market.marginBank,this.config.owner,this.httpClient),
+      reads.getPerpFeedStatus(market.poolAddress,this.httpClient),
+      this.httpClient.getBlockNumber(),
     ]);
     if(!health.priceable||!feed.markPriceOk||feed.markPrice<=0n)
       throw new Error(`Stale/unpriceable oracle on ${symbol}`);
@@ -111,15 +158,15 @@ export class SomniaPlane {
     const markets=this.pools();
     if(markets.length===0)throw new Error("Market set unavailable");
     const primary=markets[0]!;
-    const account=await this.client.getMarginAccount(primary.marginBank,this.config.owner);
+    const account=await this.marginAccount(primary.marginBank,this.config.owner);
     const active=account.activePerpPools as `0x${string}`[];
     let total=0;
     for(const pool of active) {
       const market=markets.find(m=>m.poolAddress.toLowerCase()===pool.toLowerCase());
       if(!market)throw new Error("Cannot value position on unknown pool");
       const [position,health]=await Promise.all([
-        this.client.getPerpPosition({marginBank:market.marginBank,account:this.config.owner,pool}),
-        this.client.getPerpHealthSnapshot(pool),
+        this.position({marginBank:market.marginBank,account:this.config.owner,pool}),
+        this.health(pool),
       ]);
       if(!health.priceable)throw new Error("Active position on unpriceable market");
       const units=Math.abs(numberRaw(position.size,market.baseDecimals));
@@ -129,15 +176,35 @@ export class SomniaPlane {
   }
   async reducible(symbol:Market) {
     const m=this.info(symbol);
-    const position=await this.client.getPerpPosition({
+    const position=await this.position({
       marginBank:m.marginBank,account:this.config.owner,pool:m.poolAddress,
     });
     return BigInt(position.size);
   }
+  async marginAccount(marginBank:`0x${string}`,account:`0x${string}`) {
+    const reads=await sdkHttpReads;
+    return reads.getMarginAccount(marginBank,account,this.httpClient);
+  }
+  async maxPerpOrderSize(params:{
+    pool:`0x${string}`;marginBank:`0x${string}`;account:`0x${string}`;
+    isBid:boolean;price:bigint;autoPull?:boolean;builderFeeBpsTimes1k?:bigint;
+  }) {
+    const reads=await sdkHttpReads;
+    return reads.getMaxPerpOrderSize(params,this.httpClient);
+  }
+  async position(ref:{marginBank:`0x${string}`;account:`0x${string}`;pool:`0x${string}`}) {
+    const reads=await sdkHttpReads;
+    return reads.getPerpPosition(ref,this.httpClient);
+  }
+  async health(pool:`0x${string}`) {
+    const reads=await sdkHttpReads;
+    return reads.getPerpHealthSnapshot(pool,this.httpClient);
+  }
   async reconcileOrder(poolAddress:`0x${string}`,orderId:string) {
     const id=BigInt(orderId);
+    const reads=await sdkHttpReads;
     const [onchain,history]=await Promise.all([
-      this.sdk.client.getOrderOnchain(poolAddress,id),
+      reads.getOrderOnchain(poolAddress,id,this.httpClient),
       this.sdk.client.listPerpOrderHistory(this.config.owner,{pool:poolAddress,limit:100}),
     ]);
     const indexed=history.find(row=>row.orderId===orderId)??null;

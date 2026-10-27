@@ -234,11 +234,11 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
 
   // All decisions use fresh cross-margin state from the bank, plus protocol-side sizing.
   const [account,exposure,permission,activity,sizing]=await Promise.all([
-    plane.client.getMarginAccount(market.marginBank,config.owner),
+    plane.marginAccount(market.marginBank,config.owner),
     plane.exposureUsd(),
     bot?(action.kind==="reduce"?bot.reduceAuthorized(market.poolAddress):bot.authorized(market.poolAddress)):Promise.resolve(false),
     api.activity(s.id),
-    plane.client.getMaxPerpOrderSize({
+    plane.maxPerpOrderSize({
       pool:market.poolAddress,marginBank:market.marginBank,account:config.owner,
       isBid:order.side==="long",price:order.price,autoPull:false,
     }),
@@ -515,14 +515,14 @@ async function reconcileUnresolved() {
 async function publishAccount() {
   const first=plane.pools()[0];
   if(!first)return;
-  const data=await plane.client.getMarginAccount(first.marginBank,config.owner);
+  const data=await plane.marginAccount(first.marginBank,config.owner);
   const positions:{market:string;size:string;markUsd:number;notionalUsd:number}[]=[];
   for(const active of data.activePerpPools) {
     const pool=plane.pools().find(m=>m.poolAddress.toLowerCase()===active.toLowerCase());
     if(!pool)throw new Error("Unknown pool holds account collateral");
     const [position,price]=await Promise.all([
-      plane.client.getPerpPosition({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}),
-      plane.client.getPerpHealthSnapshot(pool.poolAddress),
+      plane.position({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}),
+      plane.health(pool.poolAddress),
     ]);
     if(!price.priceable)throw new Error("Active pool oracle unavailable");
     const size=Number(formatUnits(position.size,pool.baseDecimals));
