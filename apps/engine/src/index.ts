@@ -1,4 +1,4 @@
-import {decodeEventLog,formatUnits} from "viem";
+import {decodeEventLog,formatUnits,parseUnits} from "viem";
 import {createServer,type Server} from "node:http";
 import {decodePlaceOrder,perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
@@ -6,7 +6,7 @@ import {createPublicClient,http} from "viem";
 import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
 import {decide,intentKey,prepareTrade} from "./decision.js";
-import {SomniaPlane} from "./markets.js";
+import {SomniaPlane,upToGrid} from "./markets.js";
 import {LinkedBot} from "./operator.js";
 
 const config=configFromEnv();
@@ -201,6 +201,13 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   catch(err) {
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["SIZE_INVALID"],detail:textError(err)});
     return;
+  }
+  if(config.authorizedMinSellPriceUsd!==undefined&&order.side==="short") {
+    const absoluteFloor=upToGrid(
+      parseUnits(config.authorizedMinSellPriceUsd.toFixed(market.quoteDecimals),market.quoteDecimals),
+      market.tickSize,
+    );
+    if(order.price<absoluteFloor)order={...order,price:absoluteFloor};
   }
   if(config.authorizedMaxPriceUsd!==undefined) {
     const orderPriceUsd=Number(formatUnits(order.price,market.quoteDecimals));
