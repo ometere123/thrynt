@@ -1,6 +1,6 @@
 # THRYNT — DreamDEX Perps Builder Bounty submission pack
 
-Status as of 2026-10-27: the repository, public demo, real Hideki event ingestion and safety-rejection evidence are ready for review. The required live-order evidence is still pending a fresh owner authorization for a bounded order whose current book, precision and notional checks pass. No transaction hash or X URL is fabricated in this document.
+Status as of 2026-10-27: the repository, public demo, real Hideki event ingestion and safety-rejection evidence are ready for review. A precise 30-minute owner authorization was received, but the strategy expiry elapsed before the live gate completed; no transaction was broadcast. The required live-order evidence therefore still needs a fresh owner authorization. No transaction hash or X URL is fabricated in this document.
 
 ## Official MVP requirements checked
 
@@ -39,6 +39,7 @@ THRYNT is an event-driven DreamDEX perpetuals automation and decision-audit syst
 - Two genuine `OpenInterestUpdated` BTC events matched the controlled proof rule and were rejected by `PAUSED`; the public Decision Trace shows event transaction hashes, blocks, matched conditions and the no-submission result.
 - The approved production session completed authenticated save, simulation, arming and pausing. The three product templates remain present and reusable.
 - The Fly runtime derives the linked bot address `0x94d8333f14a5ED04634F0F5b7200f5c2f1D294F1`, matching the configured public address. The owner trading wallet is `0xdA80A0D2FBDEF6eEe94e2e27F82a34896B444126`.
+- The expired authorization window was closed safely: Fly is `observe` with live opt-in disabled, global pause is enabled, the controlled strategy is paused, the temporary order-price floor secret is removed, and the public trace contains no execution intent or transaction hash.
 
 ## Live-order evidence to add after explicit authorization
 
@@ -71,7 +72,7 @@ These are drafts only. The owner must publish them from the intended X account a
 
 ## Remaining owner-controlled submission actions
 
-- Confirm the exact bounded live-order preflight and authorize one testnet transaction; a prior quote is not treated as current authorization.
+- Review a fresh bounded live-order preflight and authorize one new testnet transaction; the expired authorization above is not reusable.
 - If not already whitelisted, request DoraHacks Build whitelist access using the same email registered on DoraHacks.
 - Publish two or three drafts above and paste their real URLs into the README `X posts` section.
 - Submit the Build through DoraHacks and retain the visible confirmation page or ID.

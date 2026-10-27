@@ -1,12 +1,13 @@
 # Engineering verification matrix
 
-This is a release-gate checklist. Checked items below have recorded evidence; unchecked
-items remain intentionally blocked or require the first owner-authorized order.
+This is a release-gate checklist. Checked items below have recorded evidence. The first
+bounded-order authorization window expired before all live gates completed, so no order
+was broadcast and the live-order rows remain unchecked.
 
 ## Static checks
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-27. npm reported development-only advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
-- [x] The latest clean local run passed `npm run typecheck`, `npm test` (14 core + 7 engine tests), `npm run build`, `npm run test:e2e` (6 passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit.
+- [x] The post-repair local run passed `npm run typecheck`, `npm test` (14 core + 7 engine tests), `npm run build`, `npm run test:e2e` (6 passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit.
 - [x] GitHub Actions run [40523829444](https://github.com/ometere123/thrynt/actions/runs/40523829444) passed for commit `fc2ef55d274722a66918e7fdc800bc5ed7cba3c1`, including the short-notional safety fix, expanded tests and production build.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
@@ -20,6 +21,7 @@ items remain intentionally blocked or require the first owner-authorized order.
 - [x] Chain ID resolves to 50383, independent read via RPC.
 - [x] SDK 0.32.1 discovers real perp markets and correct pool addresses.
 - [x] Fly runtime received real BTC `OpenInterestUpdated` logs; SDK ABI decoding classified events with block, transaction and log index. The production engine starts five official SDK `watchMarket` lanes plus the perp plane; Fly `/readyz` reports `mode=tailing`, `wsConnected=true`, `watchCount=6`, fresh block progress and healed gaps. Receipt-backed raw discovery uses bounded HTTP polling because Hideki raw WS delivery can replay or time out.
+- [x] After a Hideki SDK `eth_blockNumber` read timeout, authoritative snapshots/order-book/margin/sizing reads were moved to the pinned SDK 0.32.1 read helpers over the configured Hideki HTTP RPC. The SDK WebSocket tail remains a separate required health signal; failed HTTP reads still fail closed.
 - [x] Two-market observation reads current mark/index/funding state through the SDK at evaluation time; account state is read from MarginBank rather than fabricated UI values.
 - [x] A captured event includes a real transaction hash, block and log index; receipt lookup remains a required pre-signing/reconciliation gate.
 - [x] Direct MarginBank read reports 1,000 USDso-equivalent equity/available margin, zero locked collateral, zero active positions and `Healthy`; the same real values are published by the Fly engine and Worker.
@@ -28,13 +30,14 @@ items remain intentionally blocked or require the first owner-authorized order.
 - [x] Linked-bot permission is verified onchain for place, cancel and reduce selectors on all five discovered Hideki markets; the DreamDEX UI shows `Perps - every market`.
 - [x] Voucher campaign and owner voucher state are read from chain: claimed voucher, 1,000-unit floor, 20x campaign cap, and `alreadyClaimed` eligibility response.
 - [x] Deterministic risk tests cover low margin, stale market, excessive notional, exposure, cooldown, daily cap, duplicate intent, unpriceable inputs, expiry, pause and engine health; live onchain margin, permission and protocol sizing reads are independently verified before any live gate.
-- [ ] One supervised small live **testnet** IOC is submitted by the bot *for the owner*; this is intentionally awaiting explicit transaction authorization.
+- [ ] One supervised small live **testnet** IOC is submitted by the bot *for the owner*. A precise authorization was received, but its 30-minute validity and the v6 strategy expiry elapsed before the live gate was ready; no transaction was submitted.
 - [ ] Transaction receipt classified success/revert; fill/order ID and actual resting status reconciled independently.
 - [x] A controlled Fly machine restart completed successfully with signing disabled; startup re-established the SDK tail, singleton lease and ready state. Pending-hash reconciliation remains untested until a real authorized order exists.
 - [ ] Engine restart with a pending hash reconciles receipt rather than submitting a second order.
 - [ ] Engine restart with missing hash blocks live trading until manually investigated.
 - [x] Fly is configured and scaled to one active machine; the database lease/fencing and concurrency tests are in source. A two-machine rollout was observed to be unsafe for event throughput and was immediately reduced to one.
 - [x] Global pause blocks two genuine matched live events; the public trace shows `PAUSED` and no execution intent. Per-strategy pause was exercised through the approved owner workflow. There are no outstanding orders.
+- [x] Post-window safety state was verified on 2026-10-27: Fly `mode=observe`, `liveOptIn=false`, one leased/healthy machine with `wsConnected=true`, Cloudflare `global_pause=true`, zero armed strategies, no execution intents and no transaction hashes in the public trace. The temporary authorized sell-floor secret was removed.
 
 ## End-to-end UX
 
