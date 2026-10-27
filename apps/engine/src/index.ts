@@ -2,6 +2,7 @@ import {decodeEventLog,formatUnits} from "viem";
 import {createServer,type Server} from "node:http";
 import {decodePlaceOrder,perpPoolEventsAbi,orderBookEventsAbi,type TailStatus} from "@somnia-chain/markets-sdk";
 import {checkRisk,type Market,type MetricSnapshot,type Rule} from "@thrynt/core";
+import {createPublicClient,http} from "viem";
 import {ThryntApi,type EngineState,type StoredStrategy} from "./api.js";
 import {configFromEnv} from "./config.js";
 import {decide,intentKey,prepareTrade} from "./decision.js";
@@ -15,7 +16,16 @@ const bot=config.botPrivateKey
   ?new LinkedBot(config.owner,config.botPrivateKey,plane.chain,config.rpc):null;
 if(bot&&config.expectedBotAddress&&bot.address.toLowerCase()!==config.expectedBotAddress.toLowerCase())
   throw new Error("Derived BOT_PRIVATE_KEY address does not match EXPECTED_BOT_ADDRESS");
-const publicClient=plane.client.getViemClient();
+// The SDK owns the persistent WebSocket live tail. Raw receipt-backed trigger
+// discovery uses the bounded HTTP RPC transport because Hideki's WebSocket log
+// subscription has been observed to replay logs several blocks late. Polling
+// still produces genuine onchain log identities; the three-block freshness gate
+// below remains fail-closed for any delayed response.
+const publicClient=createPublicClient({
+  chain:plane.chain,
+  transport:http(config.rpc,{timeout:15_000}),
+  pollingInterval:2_000,
+});
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
 const acceptableEvents=new Set(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]);
@@ -347,6 +357,8 @@ function watchAllPools() {
   for(const market of plane.pools()) {
     const stop=publicClient.watchEvent({
       address:market.poolAddress,
+      poll:true,
+      pollingInterval:2_000,
       onLogs:logs=>{
         for(const log of logs) {
           if(!log.transactionHash||log.blockNumber===null||log.logIndex===null)continue;
