@@ -31,7 +31,7 @@ describe("order preparation",()=>{
     const book={blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:parseUnits("4001",18)};
     const p=prepareTrade(templates()[0]!,input,info,0n,book);
     expect(p.price).toBeLessThanOrEqual(book.bestBid);
-    expect(p.notionalUsd).toBeCloseTo(0.004*3994,8);
+    expect(p.notionalUsd).toBeCloseTo(0.004*4000,8);
   });
   it("uses the fresh best ask as a side-aware long execution ceiling",()=>{
     const rule=structuredClone(templates()[0]!);

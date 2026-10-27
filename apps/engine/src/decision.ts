@@ -46,7 +46,13 @@ export function prepareTrade(
     ? ((raw+info.tickSize-1n)/info.tickSize)*info.tickSize
     : (raw/info.tickSize)*info.tickSize;
   if(price<=0n)throw new Error("Order price invalid");
-  const notionalUsd=Number(quantity)/10**info.baseDecimals*Number(formatUnits(price,info.quoteDecimals));
+  // The limit protects the side of execution: a long may fill no higher than
+  // its ask-plus-slippage ceiling, while a short must be sized against the
+  // highest currently executable bid, not its lower sell floor. Keep this
+  // notional ceiling independent from the side-aware limit-price guard.
+  const notionalPrice=side==="short"&&book?.bestBid!==null&&book?.bestBid!==undefined
+    ? book.bestBid : price;
+  const notionalUsd=Number(quantity)/10**info.baseDecimals*Number(formatUnits(notionalPrice,info.quoteDecimals));
   if(!Number.isFinite(notionalUsd)||notionalUsd<=0)throw new Error("Invalid trade notional");
   return {market:action.market,side,quantity,price,notionalUsd,
     orderType:action.kind==="trade"&&action.orderType==="POST_ONLY"?3:2};
