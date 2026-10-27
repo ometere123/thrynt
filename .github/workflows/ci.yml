@@ -17,7 +17,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
+      # GitHub-hosted Ubuntu images already include Playwright's Linux runtime
+      # dependencies; installing only the pinned browser avoids an apt lock/
+      # distro-migration hang while keeping the E2E browser deterministic.
+      - run: npx playwright install chromium
       - run: npm run test:e2e
         env:
           THRYNT_E2E_BASE_URL: https://thrynt.vercel.app
