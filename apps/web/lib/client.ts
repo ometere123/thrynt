@@ -1,6 +1,9 @@
 "use client";
 import {createClient,type SupabaseClient} from "@supabase/supabase-js";
 let singleton:SupabaseClient|null=null;
+export class ApiRequestError extends Error {
+  constructor(message:string,readonly status:number){super(message);this.name="ApiRequestError";}
+}
 export function authClient():SupabaseClient|null {
   const url=process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -28,7 +31,7 @@ export async function ownerPost<T>(path:string,body?:unknown):Promise<T> {
     },body:JSON.stringify(body??{}),
   });
   const payload=await response.json();
-  if(!response.ok)throw new Error(payload.error??payload.errors?.join(", ")??"Request rejected");
+  if(!response.ok)throw new ApiRequestError(payload.error??payload.errors?.join(", ")??"Request rejected",response.status);
   return payload as T;
 }
 export async function ownerGet<T>(path:string):Promise<T> {
@@ -39,6 +42,6 @@ export async function ownerGet<T>(path:string):Promise<T> {
     headers:{"Authorization":`Bearer ${data.session.access_token}`},cache:"no-store",
   });
   const payload=await response.json();
-  if(!response.ok)throw new Error(payload.error??"Request rejected");
+  if(!response.ok)throw new ApiRequestError(payload.error??"Request rejected",response.status);
   return payload as T;
 }

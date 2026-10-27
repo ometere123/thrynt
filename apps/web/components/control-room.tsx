@@ -13,7 +13,7 @@ import {
   MARKET_CODES,METRIC_CODES,compareNumbers,evaluate,templates,validateRule,
   type Market,type Metric,type MetricSnapshot,type Rule,
 } from "@thrynt/core";
-import {authClient,ownerGet,ownerPost,publicGet} from "../lib/client";
+import {ApiRequestError,authClient,ownerGet,ownerPost,publicGet} from "../lib/client";
 
 type Tab="Overview"|"Strategy Studio"|"Markets"|"Live Pulse"|"Positions & Risk"|"Decision Trace"|"Settings";
 const tabs:Tab[]=["Overview","Strategy Studio","Markets","Live Pulse","Positions & Risk","Decision Trace","Settings"];
@@ -74,6 +74,12 @@ const metricLabels:Record<Metric,string>={
   openInterestUsd:"Open interest (USD)",availableMarginUsd:"Available margin (USD)",
   marginRatioBps:"Margin health (bps)",
 };
+// UX defaults are minimum-sized starting points from the currently deployed
+// Hideki market grids. The engine always re-reads authoritative SDK metadata
+// and rejects a stale or invalid quantity before any signed order.
+const defaultTradeQuantities:Record<Market,string>={
+  BTC:"0.00013",ETH:"0.004",SOL:"0.1",XRP:"6.9",DOGE:"120",
+};
 const cmpLabels={gt:">",gte:"≥",lt:"<",lte:"≤",eq:"="};
 const simulated=(market:Market):MetricSnapshot=>({
   market,observedAt:new Date().toISOString(),blockNumber:"0",
@@ -90,6 +96,7 @@ export function ControlRoom() {
   const [traces,setTraces]=useState<Trace[]>([]);
   const [fetchError,setFetchError]=useState<string|null>(null);
   const [trader,setTrader]=useState<string|null>(null);
+  const [ownerAuthorized,setOwnerAuthorized]=useState(false);
   const [email,setEmail]=useState("");
   const [authMessage,setAuthMessage]=useState("");
   const [strategies,setStrategies]=useState<StrategyRow[]>([]);
@@ -121,8 +128,12 @@ export function ControlRoom() {
   const loadOwner=useCallback(async()=>{
     try {
       const data=await ownerGet<{strategies:StrategyRow[]}>("/v1/owner/strategies");
-      setStrategies(data.strategies??[]);
-    }catch(err){toast(err instanceof Error?err.message:"Unable to load your strategies",true);}
+      setStrategies(data.strategies??[]);setOwnerAuthorized(true);
+    }catch(err){
+      setStrategies([]);setOwnerAuthorized(false);
+      if(!(err instanceof ApiRequestError&&err.status===401))
+        toast(err instanceof Error?err.message:"Unable to load your strategies",true);
+    }
   },[]);
 
   useEffect(()=>{
@@ -131,13 +142,16 @@ export function ControlRoom() {
     const interval=setInterval(()=>void loadPublic(),15000);
     const auth=authClient();
     if(!auth)return()=>clearInterval(interval);
-    void auth.auth.getUser().then(({data})=>setTrader(data.user?.email??null));
+    void auth.auth.getUser().then(({data})=>{
+      setTrader(data.user?.email??null);
+      if(!data.user)setOwnerAuthorized(false);
+    });
     const {data:listener}=auth.auth.onAuthStateChange((_event,session)=>{
-      setTrader(session?.user.email??null);
+      setTrader(session?.user.email??null);setOwnerAuthorized(false);
     });
     return()=>{clearInterval(interval);listener.subscription.unsubscribe();};
   },[loadPublic]);
-  useEffect(()=>{if(trader)void loadOwner();else setStrategies([]);},[trader,loadOwner]);
+  useEffect(()=>{if(trader)void loadOwner();else {setStrategies([]);setOwnerAuthorized(false);}},[trader,loadOwner]);
   const latestMarkets=overview?.markets??[];
   const market=(code:Market)=>latestMarkets.find(m=>m.symbol===code);
   const status=overview?.engine;
@@ -161,7 +175,7 @@ export function ControlRoom() {
         setSavedId(result.id);toast("Immutable strategy draft saved in Supabase");
       }
       setDirty(false);setSimulationStored(false);await loadOwner();
-    }catch(err){toast(err instanceof Error?err.message:"Save failed",true);}
+    }catch(err){if(err instanceof ApiRequestError&&err.status===401){setOwnerAuthorized(false);setStrategies([]);}toast(err instanceof Error?err.message:"Save failed",true);}
     finally{setBusy(false);}
   };
   const simulate=async()=>{
@@ -188,7 +202,7 @@ export function ControlRoom() {
         });
         setSimulationStored(true);
         toast("Simulation stored against the current immutable rule version");
-      }catch(err){toast(err instanceof Error?err.message:"Simulation not saved",true);}
+      }catch(err){if(err instanceof ApiRequestError&&err.status===401){setOwnerAuthorized(false);setStrategies([]);}toast(err instanceof Error?err.message:"Simulation not saved",true);}
       finally{setBusy(false);}
     }else toast("Local preview complete; save the rule before an armable simulation");
   };
@@ -199,13 +213,13 @@ export function ControlRoom() {
       await ownerPost(`/v1/owner/strategies/${savedId}/arm`);
       toast("Strategy armed. Live trades still require healthy engine, global enable and Fly testnet opt-in.");
       await loadOwner();
-    }catch(err){toast(err instanceof Error?err.message:"Arm rejected",true);}
+    }catch(err){if(err instanceof ApiRequestError&&err.status===401){setOwnerAuthorized(false);setStrategies([]);}toast(err instanceof Error?err.message:"Arm rejected",true);}
     finally{setBusy(false);}
   };
   const pauseStrategy=async(id:string)=>{
     setBusy(true);
     try{await ownerPost(`/v1/owner/strategies/${id}/pause`);toast("Strategy paused; resting orders and positions remain");await loadOwner();}
-    catch(err){toast(err instanceof Error?err.message:"Unable to pause",true);}
+    catch(err){if(err instanceof ApiRequestError&&err.status===401){setOwnerAuthorized(false);setStrategies([]);}toast(err instanceof Error?err.message:"Unable to pause",true);}
     finally{setBusy(false);}
   };
   const emergency=async(paused:boolean)=>{
@@ -214,7 +228,7 @@ export function ControlRoom() {
       await ownerPost("/v1/owner/emergency",{paused});
       toast(paused?"Global new entries paused":"Global evaluation allowed (Fly live execution has its own independent opt-in)");
       await loadPublic();
-    }catch(err){toast(err instanceof Error?err.message:"Global control rejected",true);}
+    }catch(err){if(err instanceof ApiRequestError&&err.status===401){setOwnerAuthorized(false);setStrategies([]);}toast(err instanceof Error?err.message:"Global control rejected",true);}
     finally{setBusy(false);}
   };
   const sendMagicLink=async()=>{
@@ -226,7 +240,7 @@ export function ControlRoom() {
     setAuthMessage(error?error.message:"Check your email for the login link. Only the approved account can manage strategies.");
     setBusy(false);
   };
-  const logout=async()=>{await authClient()?.auth.signOut();setTrader(null);setSavedId(null);};
+  const logout=async()=>{await authClient()?.auth.signOut();setTrader(null);setOwnerAuthorized(false);setSavedId(null);};
 
   return <div className="shell">
     <aside className={`sidebar ${mobile?"sidebar-mobile":""}`}>
@@ -414,7 +428,7 @@ export function ControlRoom() {
                 <div className="action-options">{(["trade","reduce","notify","pause"] as const).map(kind=>
                   <button className={`action-choice ${draft.action.kind===kind?"chosen":""}`} key={kind}
                     onClick={()=>update(r=>({...r,action:kind==="trade"?
-                      {kind,market:r.trigger.market,side:"long",quantity:"0.001",orderType:"IOC",slippageBps:15}:
+                      {kind,market:r.trigger.market,side:"long",quantity:defaultTradeQuantities[r.trigger.market],orderType:"IOC",slippageBps:15}:
                       kind==="reduce"?{kind,market:r.trigger.market,percent:50,slippageBps:15}:
                       kind==="notify"?{kind,message:"THRYNT strategy condition matched"}:{kind}}))}>
                     {kind==="trade"?<ArrowUpRight size={19}/>:kind==="reduce"?<ArrowDownRight size={19}/>:
@@ -489,13 +503,13 @@ export function ControlRoom() {
                   <div><Activity size={17} className={simulationStored?"ok":""}/> Simulation recorded</div>
                   <div><LockKeyhole size={17}/> Explicit authorization</div>
                 </div>
-                <button className="button button-outline full" disabled={!report?.valid||busy||!trader} onClick={saveDraft}>
+                <button className="button button-outline full" disabled={!report?.valid||busy||!ownerAuthorized} onClick={saveDraft}>
                   <Save size={16}/>{savedId?"Save new version":"Save draft"}</button>
                 <button className="button button-subtle full" disabled={!report?.valid||busy} onClick={simulate}>
                   <Play size={16}/> Simulate conditions</button>
-                <button className="button button-primary full" disabled={!trader||!savedId||dirty||!simulationStored||busy}
+                <button className="button button-primary full" disabled={!ownerAuthorized||!savedId||dirty||!simulationStored||busy}
                   onClick={arm}><Zap size={16}/> ARM STRATEGY</button>
-                {!trader&&<p className="small-note">Sign in as the approved trader under Settings to save or arm a rule.</p>}
+                {!ownerAuthorized&&<p className="small-note">{trader?"This signed-in identity is not approved for owner controls yet.":"Sign in as the approved trader under Settings to save or arm a rule."}</p>}
                 {simulation&&<div className="simulation-result">
                   <div className="sim-top"><strong>SIMULATION</strong>
                     <Pill tone={simulation.matched?"green":"amber"}>{simulation.matched?"MATCH":"SKIP"}</Pill></div>
@@ -507,7 +521,7 @@ export function ControlRoom() {
               </Panel>
             </div>
           </div>
-          {trader&&<Panel title="Saved strategies" subtitle="Owner-only control plane">
+          {ownerAuthorized&&<Panel title="Saved strategies" subtitle="Owner-only control plane">
             {strategies.length?<div className="strategies-table">{strategies.map(s=>
               <div className="strategy-row" key={s.id}>
                 <div><strong>{s.name}</strong><span>Version {s.current_version} · {short(s.id,8)}</span></div>
@@ -588,7 +602,7 @@ export function ControlRoom() {
         {tab==="Settings"&&<div className="two-column">
           <Panel title="Trader authentication" subtitle="Supabase Auth and an owner-user allowlist">
             {trader?<div className="signed-in"><span className="signed-icon"><Check size={20}/></span>
-              <div><strong>Signed in</strong><p>{trader}</p></div>
+              <div><strong>Signed in</strong><p>{trader}</p><p className="small-note">{ownerAuthorized?"Approved owner controls active":"Authenticated, but not approved for owner controls"}</p></div>
               <button className="button button-outline" onClick={logout}>Sign out</button></div>:
               <div className="auth-form"><label className="field"><span>Authorized trader email</span>
                 <input placeholder="your@email.com" type="email" value={email} onChange={e=>setEmail(e.target.value)}/></label>
@@ -609,9 +623,9 @@ export function ControlRoom() {
           </Panel>
           <Panel title="Emergency execution controls" subtitle="A separate owner action, never conflated with position closure">
             <div className="safety-note"><CircleAlert size={19}/><p>Global pause blocks new THRYNT submissions. It cannot revoke an onchain linked-bot grant or automatically liquidate a position.</p></div>
-            <div className="button-row"><button className="button button-danger" disabled={!trader||busy} onClick={()=>void emergency(true)}>
+            <div className="button-row"><button className="button button-danger" disabled={!ownerAuthorized||busy} onClick={()=>void emergency(true)}>
               <Ban size={15}/> PAUSE NEW ENTRIES</button>
-              <button className="button button-outline" disabled={!trader||busy} onClick={()=>void emergency(false)}>
+              <button className="button button-outline" disabled={!ownerAuthorized||busy} onClick={()=>void emergency(false)}>
                 <Play size={15}/> RESUME EVALUATION</button></div>
             <p className="small-note">For an actual emergency, also revoke operator permissions in DreamDEX and inspect/cancel exchange orders manually.</p>
           </Panel>

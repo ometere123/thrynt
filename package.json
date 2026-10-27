@@ -9,11 +9,13 @@
     "build": "npm run build -w @thrynt/core && npm run build -w @thrynt/api && npm run build -w @thrynt/engine && npm run build -w @thrynt/web",
     "dev:web": "npm run dev -w @thrynt/web",
     "dev:api": "npm run dev -w @thrynt/api",
-    "dev:engine": "npm run dev -w @thrynt/engine"
+    "dev:engine": "npm run dev -w @thrynt/engine",
+    "test:e2e": "playwright test"
   },
   "engines": {"node": ">=22"},
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@playwright/test": "1.55.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   },

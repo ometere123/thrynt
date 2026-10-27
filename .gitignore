@@ -11,3 +11,6 @@ apps/api/supabase/.temp/
 coverage/
 *.log
 *.tsbuildinfo
+
+.vercel
+.env*

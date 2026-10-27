@@ -413,6 +413,15 @@ async function publishAccount() {
     marginStatus:String(data.marginStatus),positions,
   });
 }
+async function publishMarkets() {
+  // Keep the public Markets and Risk views populated from current SDK reads,
+  // even when no armed rule is interested in the latest pool event. A failed
+  // sample rejects the whole publication cycle; supervise() then withholds
+  // the heartbeat so the lease expires instead of presenting stale data as
+  // live execution input.
+  const snapshots=await Promise.all(plane.pools().map(m=>plane.sample(m.baseSymbol)));
+  await Promise.all(snapshots.map(snapshot=>api.market(snapshot)));
+}
 
 async function supervise() {
   while(!stopped) {
@@ -426,6 +435,7 @@ async function supervise() {
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
         healthy=clean && queued<100 && feedHealthy;
+        await publishMarkets();
         await publishAccount();
         await api.heartbeat(leaseGeneration!,seenBlock,healthy?null:"Unresolved order or feed/queue issue");
       }

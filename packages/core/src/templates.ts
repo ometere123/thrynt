@@ -19,7 +19,10 @@ export function templates(): Rule[] {
           {id: "eth-premium", market: "ETH", metric: "premiumBps", compare: "gt", value: 10},
         ],
       }],
-      action: {kind: "trade", market: "ETH", side: "short", quantity: "0.001", orderType: "IOC", slippageBps: 15},
+      // Hideki's current ETH-PERP lot/minimum grid is 0.0001/0.004 ETH.
+      // Keep the reusable template immediately placeable while the engine
+      // still re-reads the live market grid before every signed order.
+      action: {kind: "trade", market: "ETH", side: "short", quantity: "0.004", orderType: "IOC", slippageBps: 15},
       limits: limits(),
     },
     {

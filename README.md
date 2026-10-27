@@ -83,7 +83,7 @@ Three templates are included: Cross-Market Confirmation, Funding Divergence and 
 
 ## Setup for local review
 
-Prerequisites: Node 22+, npm, a newly created Supabase project, and optionally a deployed Worker and funded Hideki testnet bot account.
+Prerequisites: Node 22+, npm, an authorized Supabase project, and optionally a deployed Worker and funded Hideki testnet bot account.
 
 ```bash
 npm ci
@@ -94,12 +94,12 @@ npm run dev:web
 
 Copy `.env.example` into local environment variables; do **not** put real secrets into tracked files. The web UI can run in a disconnected read-only state; it does not fabricate testnet balances or transaction IDs.
 
-1. Apply `supabase/migrations/0001_thrynt.sql` through `0004_service_role_grants.sql` using the Supabase CLI or SQL Editor after checking the project target. Never reset an existing project.
+1. Apply `supabase/migrations/0001_thrynt.sql` through `0005_fix_arm_strategy_version_qualification.sql` using the Supabase CLI or SQL Editor after checking the project target. Never reset an existing project.
 2. Enable email link sign-in in Supabase Auth, authorize the correct redirect domain, sign in once, and set the resulting Supabase Auth user UUID as `TRADER_USER_ID` on Cloudflare.
 3. Deploy the Cloudflare Worker named `thrynt`, setting server-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ENGINE_API_KEY`, and exact `ALLOWED_ORIGIN`.
 4. Deploy the web frontend to Vercel with the public Worker URL and Supabase publishable key.
 5. On DreamDEX Hideki, create/fund the OWNER account with USDso margin, create a separate bot key with STT for gas, then Link a Bot for the required perp pools.
-6. Configure Fly secrets: `THRYNT_API_URL`, `THRYNT_ENGINE_API_KEY`, `OWNER_ADDRESS`, `PORT`, and the Somnia endpoints. Add `BOT_PRIVATE_KEY` and `EXPECTED_BOT_ADDRESS` only for an explicitly authorized live testnet run; the engine derives the key address and refuses to start live on a mismatch.
+6. Configure Fly secrets: `THRYNT_API_URL`, `THRYNT_ENGINE_API_KEY`, `OWNER_ADDRESS`, `PORT`, and the Somnia endpoints. Store `BOT_PRIVATE_KEY` only in Fly secrets and set `EXPECTED_BOT_ADDRESS` to the linked public bot address; the engine derives the key address and refuses to start live on a mismatch. Possessing the secret is not execution authorization: live mode, the feature flag, global pause and the exact owner-approved preflight remain separate gates.
 7. Start with `EXECUTION_MODE=observe` and `ENABLE_TESTNET_EXECUTION=false`. Confirm successful event observation, immutable trace creation, account telemetry, snapshots, and restart/recovery.
 8. For a supervised testnet execution only: enable live mode deliberately on Fly **and** explicitly unpause the global engine via the authenticated dashboard. Use a dedicated small-capital account.
 
@@ -122,11 +122,13 @@ Pass the monorepo root as Docker build context. The worker exposes only non-secr
 | Vercel | https://thrynt.vercel.app | Production deployment READY; public seven-screen dashboard verified in Chrome |
 | Cloudflare Worker | https://thrynt.delealufejoel.workers.dev | `/health` and public telemetry routes respond; owner/engine boundaries reject unauthenticated requests |
 | Fly engine | https://thrynt-engine.fly.dev | One machine in `lhr`, observation-only, `/healthz` ready and `/readyz` ready |
-| Supabase | `qpvgldadpwiipqgynxzd` | Existing `ACTIVE_HEALTHY` project; migrations 0001–0004 and Auth redirect configuration applied |
+| Supabase | `qpvgldadpwiipqgynxzd` | Existing `ACTIVE_HEALTHY` project; migrations 0001–0005 and Auth redirect configuration applied |
 
 ## Current verification boundary
 
-The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and a direct WebSocket subscription from both the workstation and Fly runtime. The Worker public overview currently reports real engine heartbeat and account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. The linked DreamDEX bot is authorized on BTC-PERP and ETH-PERP by direct chain reads. No Supabase Auth user is currently present, so `TRADER_USER_ID` is intentionally unset and owner mutations remain blocked. Keep `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled until the owner explicitly authorizes the first bounded testnet transaction.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and a real pool-log subscription from the Fly runtime. A direct workstation WSS probe timed out; this environment-specific limitation is documented, while the deployed runtime remains healthy and continuously subscribed. The Worker public overview reports real engine heartbeat and account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address, but the engine remains observation-only and no transaction has been broadcast by THRYNT.
+
+Keep `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled until the exact bounded testnet order preflight is reviewed and the owner explicitly authorizes that transaction.
 
 ## Tests and acceptance
 
@@ -134,6 +136,7 @@ The current environment has been verified against Hideki RPC/GraphQL, SDK market
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ```
 
 See [the verification matrix](docs/VERIFICATION.md) before enabling live orders. Type checking and mocked deterministic tests alone are **not** evidence of a real, finalized transaction. For every actual order, verify receipt status, order ID, resting/fill state, correct owner wallet, risk preflight and explorer link.
