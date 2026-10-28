@@ -1,8 +1,8 @@
 # Engineering verification matrix
 
-This is a release-gate checklist. Checked items below have recorded evidence. The first
-bounded-order authorization window expired before all live gates completed, so no order
-was broadcast and the live-order rows remain unchecked.
+This is a release-gate checklist. Checked items below have recorded evidence. One bounded
+Hideki order was authorized, broadcast once, independently reconciled and then shut down
+safely on 2026-10-28. The deployed engine is observation-only with the global pause enabled.
 
 ## Static checks
 
@@ -30,14 +30,14 @@ was broadcast and the live-order rows remain unchecked.
 - [x] Linked-bot permission is verified onchain for place, cancel and reduce selectors on all five discovered Hideki markets; the DreamDEX UI shows `Perps - every market`.
 - [x] Voucher campaign and owner voucher state are read from chain: claimed voucher, 1,000-unit floor, 20x campaign cap, and `alreadyClaimed` eligibility response.
 - [x] Deterministic risk tests cover low margin, stale market, excessive notional, exposure, cooldown, daily cap, duplicate intent, unpriceable inputs, expiry, pause and engine health; live onchain margin, permission and protocol sizing reads are independently verified before any live gate.
-- [ ] One supervised small live **testnet** IOC is submitted by the bot *for the owner*. A precise authorization was received, but its 30-minute validity and the v6 strategy expiry elapsed before the live gate was ready; no transaction was submitted.
-- [ ] Transaction receipt classified success/revert; fill/order ID and actual resting status reconciled independently.
+- [x] One supervised small live **testnet** IOC was submitted once by the linked bot for the owner: ETH-PERP short, 0.004 ETH, IOC, bounded by 9.50 USDso and 15 bps.
+- [x] Receipt classified `success`; DreamDEX order ID, one fill, filled quantity and no-resting-order state were reconciled independently from receipt events, SDK order history and active-order reads.
 - [x] A controlled Fly machine restart completed successfully with signing disabled; startup re-established the SDK tail, singleton lease and ready state. Pending-hash reconciliation remains untested until a real authorized order exists.
-- [ ] Engine restart with a pending hash reconciles receipt rather than submitting a second order.
+- [x] After the broadcast, an engine restart reconciled the persisted intent from the receipt and indexed order history without submitting another transaction; the trace records `reconciledOnRestart=true`.
 - [ ] Engine restart with missing hash blocks live trading until manually investigated.
 - [x] Fly is configured and scaled to one active machine; the database lease/fencing and concurrency tests are in source. A two-machine rollout was observed to be unsafe for event throughput and was immediately reduced to one.
-- [x] Global pause blocks two genuine matched live events; the public trace shows `PAUSED` and no execution intent. Per-strategy pause was exercised through the approved owner workflow. There are no outstanding orders.
-- [x] Post-window safety state was verified on 2026-10-27: Fly `mode=observe`, `liveOptIn=false`, one leased/healthy machine with `wsConnected=true`, Cloudflare `global_pause=true`, zero armed strategies, no execution intents and no transaction hashes in the public trace. The temporary authorized sell-floor secret was removed.
+- [x] Global pause blocks genuine matched live events; the public trace shows `BLOCKED`/pause evidence and no new execution intent. Per-strategy pause was exercised through the approved owner workflow. The one IOC order is terminally filled and no resting order remains.
+- [x] Post-order safety state was verified on 2026-10-28: Fly `mode=observe`, `liveOptIn=false`, one leased/healthy machine with `wsConnected=true`, Cloudflare `global_pause=true`, the controlled strategy remains armed but cannot submit while paused, and the public trace contains exactly one reconciled transaction intent for the supervised order. The temporary authorized sell-floor secret was removed.
 
 ## End-to-end UX
 
@@ -51,7 +51,7 @@ was broadcast and the live-order rows remain unchecked.
 - [x] The three templates were exercised through the authenticated production workflow; Cross-Market was revised to a valid Hideki ETH lot, and all three were armed and then paused.
 - [x] CI covers the public seven-screen shell on desktop and Pixel 5 mobile, including mobile drawer navigation, keyboard navigation and anonymous/malformed owner API rejection. The authenticated owner test is present but skipped unless `THRYNT_E2E_STORAGE_STATE` is provided outside CI.
 - [ ] Editing an armed strategy is denied until paused; new version invalidates previous simulation.
-- [ ] Decision Trace links the correct Somnia transaction and displays separate submission/fill states.
+- [x] Decision Trace links the correct Somnia transaction and displays separate intent/receipt/fill states; the production trace feed requests the bounded 200-record evidence window and renders a reconciled fill as `FILLED`.
 - [ ] Demo video labels all synthetic input as simulations.
 
 ## Security gates before mainnet consideration

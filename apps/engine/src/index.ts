@@ -29,8 +29,12 @@ const publicClient=createPublicClient({
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
 const acceptableEvents=new Set(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]);
-const rawMaxCatchupBlocks=128n;
-const maxEventLagBlocks=32n;
+const rawMaxCatchupBlocks=256n;
+// Hideki's HTTP log endpoint is materially slower than its chain head. A
+// larger bounded batch keeps the fallback tail close to head without making
+// an unbounded historical request; event freshness is still enforced below.
+const rawBatchBlocks=64n;
+const maxEventLagBlocks=96n;
 const observedPoolAbi=[...perpPoolEventsAbi,...orderBookEventsAbi] as const;
 type Event={
   id:string;market:Market;kind:"FundingUpdated"|"OpenInterestUpdated"|"OrderPlaced";
@@ -45,7 +49,6 @@ let rawFeedHealthy=true;
 let sdkFeedHealthy=false;
 let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
-let queue=Promise.resolve();
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
 const sdkWatchers:{stop:()=>void}[]=[];
@@ -58,6 +61,42 @@ let rawSuspended=false;
 let healthServer:Server|null=null;
 let cachedState:EngineState|null=null;
 let cachedStateAt=0;
+// Hideki can publish several pool logs while the RPC receipt and market
+// snapshot reads for one event are still in flight. A FIFO promise chain then
+// guarantees that every queued event is stale before it reaches the freshness
+// gate. Keep one in-flight event, coalesce pending events by market/kind, and
+// always service the newest pending event. This preserves serial decision and
+// intent reservation semantics while preventing an unbounded replay backlog.
+let activeEvent=false;
+const pendingEvents=new Map<string,Event>();
+
+function refreshEventQueueSize() {
+  queued=pendingEvents.size+(activeEvent?1:0);
+}
+
+function drainEventQueue() {
+  if(activeEvent||pendingEvents.size===0)return;
+  let nextKey:string|undefined;
+  let next:Event|undefined;
+  for(const [key,event] of pendingEvents) {
+    if(!next||event.blockNumber>next.blockNumber||
+      (event.blockNumber===next.blockNumber&&event.logIndex>next.logIndex)) {
+      nextKey=key;next=event;
+    }
+  }
+  if(!next||!nextKey)return;
+  pendingEvents.delete(nextKey);
+  activeEvent=true;
+  refreshEventQueueSize();
+  void processEvent(next).catch(err=>{
+    healthy=false;
+    console.error("event handler error",textError(err));
+  }).finally(()=>{
+    activeEvent=false;
+    refreshEventQueueSize();
+    drainEventQueue();
+  });
+}
 
 function interested(event:Pick<Event,"market"|"kind">) {
   if(!cachedState||Date.now()-cachedStateAt>30_000)return false;
@@ -390,14 +429,33 @@ function enqueueRawLog(market:ReturnType<SomniaPlane["pools"]>[number],log:Log) 
     id:`50383:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
   };
   if(!interested(event))return;
-  if(queued>=100) {
+  const key=`${event.market}:${event.kind}`;
+  // Replacing an already-pending event is deliberate: it is the same
+  // decision stream and the older event cannot be useful once a newer one is
+  // available. A distinct-stream overflow still fails closed.
+  if(!pendingEvents.has(key)&&queued>=100) {
     healthy=false;feedHealthy=false;console.error("Event queue saturated; live execution halted");
     return;
   }
-  queued++;
-  queue=queue.then(()=>processEvent(event)).catch(err=>{
-    healthy=false;console.error("event handler error",textError(err));
-  }).finally(()=>{queued--;});
+  pendingEvents.set(key,event);
+  refreshEventQueueSize();
+  drainEventQueue();
+}
+
+function rawSubscription() {
+  if(!cachedState||Date.now()-cachedStateAt>30_000)return null;
+  const markets=new Set<Market>();
+  const kinds=new Set<Event["kind"]>();
+  for(const strategy of cachedState.strategies) {
+    const selected=rulesFor(strategy);
+    if(!selected)continue;
+    markets.add(selected.rule.trigger.market);
+    kinds.add(selected.rule.trigger.event);
+  }
+  return {
+    markets:plane.pools().filter(m=>markets.has(m.baseSymbol)),
+    kinds:[...kinds],
+  };
 }
 
 async function pollRawLogs() {
@@ -405,7 +463,21 @@ async function pollRawLogs() {
   rawPollRunning=true;
   try {
     const head=await publicClient.getBlockNumber();
+    if(!cachedState||Date.now()-cachedStateAt>30_000) {
+      // Do not build an unbounded backlog while the control-plane state is
+      // unavailable. Re-anchor at the current head and keep live execution
+      // fail-closed until the next healthy state refresh.
+      rawNextBlock=head;
+      rawFeedHealthy=false;feedHealthy=false;
+      return;
+    }
     if(rawNextBlock===null)rawNextBlock=head;
+    const subscription=rawSubscription();
+    if(!subscription||subscription.markets.length===0||subscription.kinds.length===0) {
+      rawNextBlock=head+1n;
+      rawFeedHealthy=true;refreshFeedHealth();
+      return;
+    }
     if(head>=rawNextBlock) {
       if(head-rawNextBlock>rawMaxCatchupBlocks) {
         rawSuspended=true;rawFeedHealthy=false;feedHealthy=false;
@@ -414,18 +486,21 @@ async function pollRawLogs() {
         });
         return;
       }
-      const markets=plane.pools();
+      const toBlock=head<rawNextBlock+rawBatchBlocks-1n?head:rawNextBlock+rawBatchBlocks-1n;
+      const markets=subscription.markets;
       const byPool=new Map(markets.map(m=>[m.poolAddress.toLowerCase(),m]));
-      const logs=await publicClient.getLogs({
-        address:markets.map(m=>m.poolAddress),
-        fromBlock:rawNextBlock,
-        toBlock:head,
-      });
+      const logs=(await Promise.all(subscription.kinds.map(kind=>{
+        const event=observedPoolAbi.find(fragment=>fragment.type==="event"&&fragment.name===kind);
+        return publicClient.getLogs({
+          address:markets.map(m=>m.poolAddress),fromBlock:rawNextBlock,toBlock,
+          event,
+        } as any);
+      }))).flat() as Log[];
       for(const log of logs) {
         const market=byPool.get(log.address.toLowerCase());
         if(market)enqueueRawLog(market,log);
       }
-      rawNextBlock=head+1n;
+      rawNextBlock=toBlock+1n;
     }
     rawFeedHealthy=true;
     refreshFeedHealth();
@@ -618,6 +693,18 @@ async function main() {
     markets:plane.pools().length,
     perpPlane:plane.client.getPerpPlaneStatus(),
     status:plane.client.getLiveStatus(),
+  });
+  // Load the control-plane state before starting raw-log recovery. Starting
+  // the fallback poller first lets it observe an empty cache and then chase a
+  // backlog while the first heartbeat is still in flight. On Hideki that can
+  // exceed the bounded replay window and permanently suspend the raw feed.
+  // The initial state read is a fail-closed startup gate, so the poller is
+  // anchored at the current head only after its market/event subscription is
+  // known.
+  await refreshState();
+  console.info("Initial execution state loaded",{
+    strategyCount:cachedState?.strategies.length??0,
+    loadedAt:new Date(cachedStateAt).toISOString(),
   });
   watchAllPools();
   console.info("Onchain pool log subscriptions",stopWatchers.length);

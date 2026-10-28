@@ -204,11 +204,20 @@ export class SomniaPlane {
     const id=BigInt(orderId);
     const reads=await sdkHttpReads;
     const [onchain,history]=await Promise.all([
-      reads.getOrderOnchain(poolAddress,id,this.httpClient),
+      reads.getOrderOnchain(poolAddress,id,this.httpClient)
+        .then(order=>({order,error:null as string|null}))
+        .catch(err=>({
+          // A fully filled IOC is intentionally absent from the active-order
+          // book. Hideki's pool may report IncorrectOrder() for that head read;
+          // retain the error as evidence and use the indexed lifecycle below
+          // rather than discarding a verified fill.
+          order:null,
+          error:err instanceof Error?err.message:String(err),
+        })),
       this.sdk.client.listPerpOrderHistory(this.config.owner,{pool:poolAddress,limit:100}),
     ]);
     const indexed=history.find(row=>row.orderId===orderId)??null;
-    return {chainResting:Boolean(onchain),indexed:indexed?{
+    return {chainResting:Boolean(onchain.order),chainReadError:onchain.error,indexed:indexed?{
       status:indexed.status,rested:indexed.rested,filledQuantity:indexed.filledQuantity,
       quantityRemaining:indexed.quantityRemaining,cancelReason:indexed.cancelReason,
     }:null};

@@ -25,13 +25,19 @@ type Overview={
   recentDecisions:{id:string;status:string;recorded_at:string}[];
   account?:AccountState|null;
 };
+type ExecutionIntent={
+  id?:string;status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>;
+  receipt_status:string|null;accepted:boolean|null;order_state:string|null;reconciled_at:string|null;
+};
+type StrategyVersionRef={strategy_id:string;version:number};
 type Trace={
   id:string;status:string;recorded_at:string;
+  strategy_id?:string;strategy_version_id?:string;
+  strategy_versions?:StrategyVersionRef|StrategyVersionRef[]|null;
   evaluation:{matched?:boolean;conditions?:{metric:string;actual?:number;threshold:number;matched:boolean}[]};
   risk:{blockedBy?:string[];message?:string;details?:string};
   market_events?:{market:string;kind:string;block_number:string;transaction_hash:string}|null;
-  execution_intents?:{status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>;
-    receipt_status:string|null;accepted:boolean|null;order_state:string|null;reconciled_at:string|null}[]|null;
+  execution_intents?:ExecutionIntent|ExecutionIntent[]|null;
 };
 type AccountState={
   observedAt:string;equityUsd:number;availableMarginUsd:number;lockedMarginUsd:number;
@@ -132,7 +138,7 @@ export function ControlRoom() {
     try {
       const [o,t]=await Promise.all([
         publicGet<Overview>("/v1/public/overview"),
-        publicGet<{traces:Trace[]}>("/v1/public/traces"),
+        publicGet<{traces:Trace[]}>("/v1/public/traces?limit=200"),
       ]);
       setOverview(o);setTraces(t.traces??[]);setFetchError(null);
     }catch(err){setFetchError(err instanceof Error?err.message:"Network unavailable");}
@@ -697,22 +703,32 @@ function StatusLine({label,value,tone}:{label:string;value:string;tone:"green"|"
 function TrendingGlyph(){return <Activity size={19}/>;}
 function TraceCard({trace:t}:{trace:Trace}) {
   const [expanded,setExpanded]=useState(false);
-  const tx=t.execution_intents?.find(x=>x.tx_hash);
+  const intents=Array.isArray(t.execution_intents)?t.execution_intents:
+    (t.execution_intents?[t.execution_intents]:[]);
+  const tx=intents.find(x=>x.tx_hash);
+  const versionRef=Array.isArray(t.strategy_versions)?t.strategy_versions[0]:t.strategy_versions;
+  const reconciliation=tx?.result?.reconciliation as {
+    indexed?:{status?:string;filledQuantity?:string;quantityRemaining?:string};
+  }|undefined;
+  const fillCount=typeof tx?.result?.fillCount==="number"?tx.result.fillCount:null;
+  const filled=tx?.order_state==="filled"||reconciliation?.indexed?.status==="Filled";
   const link=tx?.tx_hash?`https://explorer.testnet.somnia.network/tokyo/tx/${tx.tx_hash}`:null;
   return <div className="trace-card">
     <button className="trace-summary" onClick={()=>setExpanded(x=>!x)} aria-expanded={expanded}>
       <span className="trace-symbol"><GitBranch size={17}/></span>
       <div><strong>{t.market_events?.kind??"Strategy evaluation"}</strong>
         <p>{t.market_events?.market??"—"}-PERP · Block {t.market_events?.block_number??"—"} · {ago(t.recorded_at)}</p></div>
-      <Pill tone={t.status==="blocked"?"amber":t.status==="confirmed"?"green":"neutral"}>{t.status.toUpperCase()}</Pill>
+      <Pill tone={t.status==="blocked"?"amber":filled||t.status==="confirmed"?"green":"neutral"}>{filled?"FILLED":t.status.toUpperCase()}</Pill>
       <ChevronDown className={expanded?"flip":""} size={18}/>
     </button>
     {expanded&&<div className="trace-details">
+      <div><span>Strategy version</span><code>{t.strategy_id??versionRef?.strategy_id??"—"} · v{versionRef?.version??"—"}</code></div>
       <div><span>Event transaction</span><code>{t.market_events?.transaction_hash??"—"}</code></div>
       <div><span>Condition result</span><strong>{t.evaluation.matched?"Matched":"Unmatched / blocked"}</strong></div>
       <div><span>Risk verdict</span><strong>{t.risk.blockedBy?.join(", ")||"No mandatory block recorded"}</strong></div>
       <div><span>Submission</span><strong>{tx?.status??"No order submitted"}{tx?.receipt_status?` · receipt ${tx.receipt_status}`:""}</strong></div>
       <div><span>Protocol outcome</span><strong>{tx?.order_state??"Not reconciled"}{tx?.order_id?` · order ${tx.order_id}`:""}</strong></div>
+      {fillCount!==null&&<div><span>Fill evidence</span><strong>{fillCount} fill event{fillCount===1?"":"s"}{reconciliation?.indexed?.filledQuantity?` · filled ${reconciliation.indexed.filledQuantity}`:""}{reconciliation?.indexed?.quantityRemaining?` · remaining ${reconciliation.indexed.quantityRemaining}`:""}</strong></div>}
       {link&&<a href={link} target="_blank" rel="noopener noreferrer">Inspect transaction on Somnia Explorer <ExternalLink size={14}/></a>}
       <p className="small-note">The transaction receipt is independently verifiable. Strategy rationale is an application-generated record, not a cryptographic proof of honest evaluation.</p>
     </div>}

@@ -1,6 +1,6 @@
 # THRYNT — DreamDEX Perps Builder Bounty submission pack
 
-Status as of 2026-10-27: the repository, public demo, real Hideki event ingestion and safety-rejection evidence are ready for review. A precise 30-minute owner authorization was received, but the strategy expiry elapsed before the live gate completed; no transaction was broadcast. The required live-order evidence therefore still needs a fresh owner authorization. No transaction hash or X URL is fabricated in this document.
+Status as of 2026-10-28: the repository, public demo, real Hideki event ingestion, safety-rejection evidence and one supervised DreamDEX order lifecycle are ready for review. The order was broadcast exactly once under a bounded owner authorization, filled, independently reconciled and shut down safely. No X URL is fabricated in this document.
 
 ## Official MVP requirements checked
 
@@ -35,21 +35,22 @@ THRYNT is an event-driven DreamDEX perpetuals automation and decision-audit syst
 ## Evidence available now
 
 - Fly `/readyz` reports chain 50383, one held lease, `mode: observe`, `liveOptIn: false`, `wsConnected: true`, six SDK watch lanes, fresh block progress and healed gaps.
-- Cloudflare public overview reports live BTC/ETH snapshots, 1,000 USDso-equivalent available margin, zero positions and global pause enabled.
-- Two genuine `OpenInterestUpdated` BTC events matched the controlled proof rule and were rejected by `PAUSED`; the public Decision Trace shows event transaction hashes, blocks, matched conditions and the no-submission result.
+- Cloudflare public overview reports live BTC/ETH snapshots, approximately 1,000 USDso-equivalent available margin, the resulting real `-0.004 ETH` position and global pause enabled.
+- Genuine `OpenInterestUpdated` BTC events matched the controlled proof rule and were rejected while paused; the public Decision Trace shows event transaction hashes, blocks, matched conditions and the no-submission result.
 - The approved production session completed authenticated save, simulation, arming and pausing. The three product templates remain present and reusable.
 - The Fly runtime derives the linked bot address `0x94d8333f14a5ED04634F0F5b7200f5c2f1D294F1`, matching the configured public address. The owner trading wallet is `0xdA80A0D2FBDEF6eEe94e2e27F82a34896B444126`.
-- The expired authorization window was closed safely: Fly is `observe` with live opt-in disabled, global pause is enabled, the controlled strategy is paused, the temporary order-price floor secret is removed, and the public trace contains no execution intent or transaction hash.
+- The one authorized order is independently verified: transaction [`0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de`](https://explorer.testnet.somnia.network/tokyo/tx/0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de), block `35175637`, DreamDEX order `16472942457822639999900`, receipt `success`, one `0.004 ETH` fill at `2348.48 USDso`, indexed status `Filled`, no resting order.
+- After the broadcast, Fly is `observe` with live opt-in disabled, global pause is enabled, the temporary order-price floor secret is removed, and the public trace intent is `reconciled` with `order_state=filled`. THRYNT did not auto-close the resulting short position.
 
-## Live-order evidence to add after explicit authorization
+## Live-order evidence recorded
 
-Record all of the following without redaction of public transaction identifiers:
+The production evidence contains all of the following without redaction of public transaction identifiers:
 
 1. fresh preflight with event, immutable strategy version, market, side, quantity, book and price band;
 2. one transaction hash and Somnia Explorer link;
 3. receipt status and block number;
-4. DreamDEX order ID and independently reconciled accepted/resting/partial/full/IOC-no-fill state;
-5. Decision Trace screenshot showing submitted, receipt and reconciliation states; and
+4. DreamDEX order ID and independently reconciled full-fill state;
+5. Decision Trace showing submitted, receipt and reconciliation states; and
 6. post-test state proving `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false` and global pause enabled.
 
 If the IOC does not fill, report `IOC no-fill` rather than treating a successful receipt as a fill. Do not submit a second order to compensate for a delayed or unknown result.
@@ -68,11 +69,10 @@ These are drafts only. The owner must publish them from the intended X account a
 
 ### Post 3 — evidence, after a real order
 
-> THRYNT’s Decision Trace now links the real Hideki event, immutable strategy version, risk verdict, DreamDEX transaction receipt and independently reconciled IOC outcome. Explorer: [INSERT REAL EXPLORER URL] Tx: [INSERT REAL HASH]. @DreamDEXSomnia
+> THRYNT’s Decision Trace links the real Hideki event, immutable strategy version, risk verdict, DreamDEX transaction receipt and independently reconciled IOC fill. Explorer: https://explorer.testnet.somnia.network/tokyo/tx/0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de @DreamDEXSomnia
 
 ## Remaining owner-controlled submission actions
 
-- Review a fresh bounded live-order preflight and authorize one new testnet transaction; the expired authorization above is not reusable.
 - If not already whitelisted, request DoraHacks Build whitelist access using the same email registered on DoraHacks.
 - Publish two or three drafts above and paste their real URLs into the README `X posts` section.
 - Submit the Build through DoraHacks and retain the visible confirmation page or ID.

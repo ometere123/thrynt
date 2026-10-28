@@ -4,7 +4,7 @@
 
 THRYNT is an open-source, event-driven DreamDEX perpetuals automation and decision-audit system targeting **Somnia Hideki testnet** (chain ID **50383**). It combines no-code deterministic rules, account-level safety gates, permissioned order execution and inspectable decision traces.
 
-This repository contains source code and deployment configuration. The current Hideki testnet deployments are listed below, but THRYNT is not audited or a managed trading service. Live signing remains disabled until an owner explicitly authorizes a bounded testnet order.
+This repository contains source code and deployment configuration. The current Hideki testnet deployments are listed below, but THRYNT is not audited or a managed trading service. One bounded Hideki testnet order was supervised and reconciled on 2026-10-28; live signing is disabled again and the global pause is enabled.
 
 ## Stack
 
@@ -126,9 +126,22 @@ Pass the monorepo root as Docker build context. The worker exposes only non-secr
 
 ## Current verification boundary
 
-The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: 1,000 USDso-equivalent margin, zero positions, and global pause enabled. Two genuine `OpenInterestUpdated` events matched the controlled demonstration strategy and were recorded as `PAUSED` safety rejections with no execution intent or transaction. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address, but the engine remains observation-only and no transaction has been broadcast by THRYNT.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: approximately 1,000 USDso-equivalent available margin, one open `-0.004 ETH` position after the supervised IOC fill, and global pause enabled. Repeated genuine `OpenInterestUpdated` events are recorded as `BLOCKED` while the pause is active. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address and is never exposed to the browser, logs or repository.
 
-Keep `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled until the exact bounded testnet order preflight is reviewed and the owner explicitly authorizes that transaction.
+## Verified supervised Hideki order
+
+On 2026-10-28, the owner-authorized controlled proof strategy executed exactly one bounded order on Somnia Hideki. The application recorded a genuine BTC `OpenInterestUpdated` event at block `35175550` (event transaction [`0x6af362b2ab8adb07c2b312e21015c0432f3bd82a2b621cf87a46d62ab967b457`](https://explorer.testnet.somnia.network/tokyo/tx/0x6af362b2ab8adb07c2b312e21015c0432f3bd82a2b621cf87a46d62ab967b457)), evaluated immutable strategy `115701c6-0415-4487-b0e2-b82ccb868442` version `8`, and matched the BTC/ETH conditions. The independent risk gateway passed the fresh ETH book, precision, margin, permission, sizing, exposure, cooldown and one-shot intent checks.
+
+- Market/action: `ETH-PERP`, short, IOC, exactly `0.004 ETH`.
+- DreamDEX order ID: `16472942457822639999900`.
+- Transaction: [`0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de`](https://explorer.testnet.somnia.network/tokyo/tx/0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de), block `35175637`, receipt `success`.
+- Receipt-decoded outcome: one fill, `0.004 ETH` filled at `2348.48 USDso`; the indexed order state is `Filled`, quantity remaining `0`, and no resting IOC order remains.
+- The authorized short floor was `max(book-derived 15 bps floor, 2309.60)`. The submitted placement price was `2344.95 USDso`, within the `9.50 USDso` notional and slippage bounds.
+- Post-order telemetry reports a real `-0.004 ETH` position. THRYNT did not automatically reverse or close it because a protocol-guaranteed reduce-only route was not independently proven.
+
+The public Decision Trace records the event transaction, strategy version, matched conditions, risk result, intent, receipt status, order ID and reconciled `filled` state. On Hideki, a fully filled IOC can disappear from the active-order read and return `IncorrectOrder()` at the chain head; THRYNT preserves that read error as evidence and uses the DreamDEX indexed order history plus receipt events for the terminal lifecycle state. This is a documented protocol read limitation, not a fabricated success.
+
+After the one broadcast, the engine was returned to `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled. No further autonomous order submissions are permitted by the deployed configuration.
 
 ## Tests and acceptance
 

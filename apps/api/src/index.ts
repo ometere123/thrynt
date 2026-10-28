@@ -55,9 +55,11 @@ app.get("/v1/public/overview",async c=>{
   });
 });
 app.get("/v1/public/traces",async c=>{
+  const requestedLimit=Number(c.req.query("limit")??"120");
+  const limit=Number.isInteger(requestedLimit)&&requestedLimit>0?Math.min(requestedLimit,200):120;
   const {data,error}=await db(c.env).from("decisions")
-    .select("id,status,recorded_at,evaluation,risk,market_events(market,kind,block_number,transaction_hash),execution_intents(status,tx_hash,order_id,result,receipt_status,accepted,order_state,reconciled_at)")
-    .order("recorded_at",{ascending:false}).limit(40);
+    .select("id,status,recorded_at,strategy_id,strategy_version_id,evaluation,risk,market_events(market,kind,block_number,transaction_hash),strategy_versions(strategy_id,version),execution_intents(id,status,tx_hash,order_id,result,receipt_status,accepted,order_state,reconciled_at)")
+    .order("recorded_at",{ascending:false}).limit(limit);
   if (error) return c.json(errorReply("History unavailable"),503);
   return c.json({traces:data??[],explorer:"https://explorer.testnet.somnia.network/tokyo"});
 });
@@ -313,7 +315,9 @@ app.get("/v1/engine/activity/:id",async c=>{
 });
 app.get("/v1/engine/unresolved",async c=>{
   const {data,error}=await db(c.env).from("execution_intents")
-    .select("id,status,tx_hash,created_at,order_id,result,action,pool_address,engine_instance,lease_generation").in("status",["reserved","submitting","submitted","unknown"])
+    .select("id,status,tx_hash,created_at,order_id,result,action,pool_address,engine_instance,lease_generation,order_state")
+    .in("status",["reserved","submitting","submitted","unknown","reconciled"])
+    .or("order_state.is.null,order_state.eq.unknown")
     .order("created_at",{ascending:true}).limit(30);
   if(error)return c.json(errorReply("Unable to reconcile pending intents"),503);
   return c.json({intents:data??[]});
