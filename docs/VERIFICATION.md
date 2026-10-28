@@ -24,7 +24,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 - [x] After a Hideki SDK `eth_blockNumber` read timeout, authoritative snapshots/order-book/margin/sizing reads were moved to the pinned SDK 0.32.1 read helpers over the configured Hideki HTTP RPC. The SDK WebSocket tail remains a separate required health signal; failed HTTP reads still fail closed.
 - [x] Two-market observation reads current mark/index/funding state through the SDK at evaluation time; account state is read from MarginBank rather than fabricated UI values.
 - [x] A captured event includes a real transaction hash, block and log index; receipt lookup remains a required pre-signing/reconciliation gate.
-- [x] Direct MarginBank read reports approximately 1,000 USDso-equivalent equity/available margin, zero locked collateral and `Healthy`; current published telemetry also includes the independently read `-0.004 ETH` position, entry/mark/P&L fields and chain-head order state.
+- [x] Direct MarginBank read at block `35495448` reports approximately 1,000 USDso-equivalent equity/available margin, zero locked collateral and `Healthy`; the current owner account is flat. The earlier `-0.004 ETH` position was independently closed outside THRYNT and is preserved as separate owner-managed evidence below.
 - [x] Funding normalization uses the SDK-reported `fundingWindowSec`; current Hideki reads report the documented 28,800-second window and are normalized to 8 hours.
 - [x] Trade precision is read from each discovered pool and applied with bigint tick/lot/minimum checks; current authoritative reads cover BTC's 8 and ETH's 18 base decimals and the CI order-preparation tests.
 - [x] Linked-bot permission is verified onchain for place, cancel and reduce selectors on all five discovered Hideki markets; the DreamDEX UI shows `Perps - every market`.
@@ -43,6 +43,14 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 - [x] Lifetime action caps are now stored in immutable rule versions and enforced independently of the daily UTC counter; the regression test covers a terminal lifetime rejection.
 - [x] Chain-head open orders and SDK position analytics are published as account telemetry; protective-stop enumeration is bounded and reports `partial` on indexer failure rather than claiming an empty protection set.
 - [ ] Filled-position reduction and exchange-held TP/SL are not enabled: direct Hideki reads show the bot's `reduce` permission, but the documented `reduceOrderFor` route targets resting orders and the ETH stop-registry owner authorization is not enabled. THRYNT remains fail-closed and the frontend does not transmit an ordinary opposite-side close.
+
+### Position-management investigation
+
+- [x] SDK `0.32.1` source and ABI were inspected. `placePerpOrder`/`placeOrderFor` carry no reduce-only argument; `reduceOrderFor` accepts an order ID and new remaining quantity, so it operates on resting orders.
+- [x] SDK `placePerpStopOrder` was inspected. Its default intent is `reduceOnly`; it routes through `PerpStopOrderRegistry` and requires the registry to be owner-approved for the pool's `placeOrderFor` selector. The current ETH pool read returned `false` for owner → ETH stop registry, so THRYNT did not grant or use it.
+- [x] Direct Hideki authorization read at the current verification block returned bot `placeOrderFor=true`, `cancelOrderFor=true`, `reduceOrderFor=true`; registry `placeOrderFor=false`, `cancelOrderFor=false`, `reduceOrderFor=false`; ETH pool `isRestricted=false`.
+- [x] The previous short is no longer open. SDK `listPerpPositionChanges` reports `CLOSE` at block `35487793`, tx [`0xc41fc769df942e19ed493f837a3d241cfbc2b92c7bd9f86c1a4254bfab12e042`](https://explorer.testnet.somnia.network/tokyo/tx/0xc41fc769df942e19ed493f837a3d241cfbc2b92c7bd9f86c1a4254bfab12e042), order `21121521964397447187584`, `0.004 ETH` closed at `2323.45 USDso`; the transaction was owner-managed and is not attributed to THRYNT.
+- [ ] No THRYNT close/reduction transaction was broadcast. A future THRYNT exit requires either a verified bot-controlled reduce-only protocol route or an explicitly implemented owner-wallet signing flow; an owner grant to the ETH stop registry would be a separate owner-authorized onchain action.
 
 ## End-to-end UX
 

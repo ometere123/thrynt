@@ -80,7 +80,7 @@ Three templates are included: Cross-Market Confirmation, Funding Divergence and 
 - The SDK currently lacks a linked-wallet `placePerpOrderFor` method. The Fly worker uses the officially documented PerpPool `placeOrderFor` via viem, **after** SDK-based sizing and pool-level operator authorization.
 - Base decimals, min quantity, tick and lot size are market-specific.
 - Funding is a rate for the pool's calculation window; normalize to 8 hours using the reported window.
-- DreamDEX's permissioned bot can trade for a linked account, but cannot withdraw collateral or create exchange-held TP/SL on that account. The linked-bot `reduceOrderFor` route reduces a resting order's remaining quantity; it is not proof of a reduce-only close for a filled position. Hideki's ETH stop-registry route currently lacks the owner-to-registry authorization required for a safe exchange-held exit, so THRYNT blocks close/reduce submission and does not send an ordinary opposite-side order.
+- DreamDEX's permissioned bot can trade for a linked account, but cannot withdraw collateral or create exchange-held TP/SL on that account. The linked-bot `reduceOrderFor` route reduces a resting order's remaining quantity; it is not proof of a reduce-only close for a filled position. Hideki's ETH stop-registry route is the protocol's reduce-only TP/SL path, but it requires an owner-signed operator approval that is not currently granted for this account. THRYNT therefore blocks close/reduce submission and does not send an ordinary opposite-side order.
 
 ## Setup for local review
 
@@ -127,7 +127,7 @@ Pass the monorepo root as Docker build context. The worker exposes only non-secr
 
 ## Current verification boundary
 
-The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: approximately 1,000 USDso-equivalent available margin, one open `-0.004 ETH` position after the supervised IOC fill, current entry/mark/P&L fields, no active resting orders, and global pause enabled. Protective-stop enumeration is explicitly marked partial when the DreamDEX indexer is unavailable; an empty list is never treated as proof that no protection exists. Repeated genuine `OpenInterestUpdated` events are recorded as `BLOCKED` while the pause is active. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address and is never exposed to the browser, logs or repository.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: approximately 1,000 USDso-equivalent available margin, a flat ETH account after a later owner-managed close, no active resting orders, and global pause enabled. Protective-stop enumeration is explicitly marked partial when the DreamDEX indexer is unavailable; an empty list is never treated as proof that no protection exists. Repeated genuine `OpenInterestUpdated` events are recorded as `BLOCKED` while the pause is active. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address and is never exposed to the browser, logs or repository.
 
 ## Verified supervised Hideki order
 
@@ -138,11 +138,24 @@ On 2026-10-28, the owner-authorized controlled proof strategy executed exactly o
 - Transaction: [`0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de`](https://explorer.testnet.somnia.network/tokyo/tx/0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de), block `35175637`, receipt `success`.
 - Receipt-decoded outcome: one fill, `0.004 ETH` filled at `2348.48 USDso`; the indexed order state is `Filled`, quantity remaining `0`, and no resting IOC order remains.
 - The authorized short floor was `max(book-derived 15 bps floor, 2309.60)`. The submitted placement price was `2344.95 USDso`, within the `9.50 USDso` notional and slippage bounds.
-- Post-order telemetry reports a real `-0.004 ETH` position. THRYNT did not automatically reverse or close it because a protocol-guaranteed reduce-only route was not independently proven.
+- The post-order account was temporarily short `-0.004 ETH`. THRYNT did not automatically reverse or close it because a protocol-guaranteed linked-bot reduce-only route was not independently proven.
 
 The public Decision Trace records the event transaction, strategy version, matched conditions, risk result, intent, receipt status, order ID and reconciled `filled` state. On Hideki, a fully filled IOC can disappear from the active-order read and return `IncorrectOrder()` at the chain head; THRYNT preserves that read error as evidence and uses the DreamDEX indexed order history plus receipt events for the terminal lifecycle state. This is a documented protocol read limitation, not a fabricated success.
 
 After the one broadcast, the engine was returned to `EXECUTION_MODE=observe`, `ENABLE_TESTNET_EXECUTION=false`, and global pause enabled. No further autonomous order submissions are permitted by the deployed configuration.
+
+## Position-management investigation
+
+Fresh Hideki reads on block `35495448` report the owner account flat: ETH position size `0`, unlocked/equity `1000.0651778444442029065` USDso, zero locked collateral, and `Healthy` margin. The original short was later closed outside THRYNT through an owner-managed transaction [`0xc41fc769df942e19ed493f837a3d241cfbc2b92c7bd9f86c1a4254bfab12e042`](https://explorer.testnet.somnia.network/tokyo/tx/0xc41fc769df942e19ed493f837a3d241cfbc2b92c7bd9f86c1a4254bfab12e042), block `35487793`, DreamDEX order `21121521964397447187584`; SDK position history records `CLOSE`, `0.004 ETH` closed at `2323.45 USDso`, and no remaining position. This is independent owner activity, not a THRYNT execution trace.
+
+The protocol findings are deliberately conservative:
+
+- `placeOrderFor` is a generic order-placement route and its deployed signature has no reduce-only flag. An opposite-side IOC can reduce, close or flip depending on live position and quantity, so THRYNT does not use it as a guaranteed close route.
+- `reduceOrderFor(address owner, orderId, newQuantityRemaining)` is authorized for the linked bot on Hideki, but it changes the remaining quantity of an existing resting order. It does not close a filled perpetual position.
+- `placePerpStopOrder` in SDK `0.32.1` creates a reduce-only perp stop by default (`intent: "reduceOnly"`; quantity `0` means the whole position at trigger). The registry triggers through `placeOrderFor`, so the owner must grant the registry's `placeOrderFor` selector first. The current ETH pool has no such owner-to-registry approval. THRYNT has not submitted that owner permission transaction and cannot safely create an exchange-held TP/SL from the bot runtime.
+- DreamDEX's linked-bot documentation explicitly says linked bots can place/cancel/reduce orders but cannot arm exchange-held TP/SL; the documented alternative is owner-managed TP/SL or a bot-monitored exit, with the latter requiring a proven reduce-only submission route. THRYNT keeps bot-monitored close/reduce disabled until that route is independently verified.
+
+Accordingly, Positions & Risk exposes authoritative position/order/protective-stop telemetry and a truthful unavailable state. It never sends an ordinary opposite-side order as a close, never claims the `reduceOrderFor` grant is a filled-position reduction capability, and never treats the separate owner-managed close above as a THRYNT action.
 
 ## Tests and acceptance
 
@@ -164,12 +177,13 @@ The MVP bounty requires two or three genuine posts about THRYNT that tag `@Dream
 
 ## Scope boundaries
 
-THRYNT is intended for **one authorized testnet owner account** with a public read-only demo. It does not host arbitrary users' private keys, make AI-selected trading decisions, guarantee profitability or provide managed money services. Filled-position reduction and exchange-held TP/SL remain blocked until DreamDEX exposes a verified owner-authorized route for the linked execution model; the UI states this limitation instead of presenting an unsafe close button. Signals and skip logs generated by the engine remain offchain application evidence, **not cryptographic proofs** of the evaluator's honesty. Transactions and receipts are independently verifiable.
+THRYNT is intended for **one authorized testnet owner account** with a public read-only demo. It does not host arbitrary users' private keys, make AI-selected trading decisions, guarantee profitability or provide managed money services. Linked-bot filled-position reduction remains blocked because the granted `reduceOrderFor` capability is for resting orders; exchange-held TP/SL is protocol-supported through an owner-signed stop-registry approval, but that owner-wallet signing flow is not implemented in THRYNT and the approval has not been granted. The UI states these boundaries instead of presenting an unsafe close button. Signals and skip logs generated by the engine remain offchain application evidence, **not cryptographic proofs** of the evaluator's honesty. Transactions and receipts are independently verifiable.
 
 ## Primary references
 
 - [DreamDEX perps developer guide](https://app.dreamdex.io/docs/developers/perps-testnet)
-- [DreamDEX linked-bot permissions](https://app.dreamdex.io/docs/trading/link-a-bot)
+- [DreamDEX linked-bot permissions](https://app.dreamdex.io/docs/trading/common/link-a-bot)
+- [DreamDEX perps orders and reduce-only rules](https://app.dreamdex.io/docs/trading/perps-testnet/orders)
 - [Somnia Markets SDK](https://prd.smk.somnia.host/docs/typescript)
 - [DreamDEX official bot kit](https://github.com/somnia-chain/dreamdex-bot-kit)
 - [Fly background workers](https://fly.io/learn/background-workers/)

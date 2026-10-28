@@ -35,12 +35,12 @@ THRYNT is an event-driven DreamDEX perpetuals automation and decision-audit syst
 ## Evidence available now
 
 - Fly `/readyz` reports chain 50383, one held lease, `mode: observe`, `liveOptIn: false`, `wsConnected: true`, six SDK watch lanes, fresh block progress and healed gaps.
-- Cloudflare public overview reports live BTC/ETH snapshots, approximately 1,000 USDso-equivalent available margin, the resulting real `-0.004 ETH` position and global pause enabled.
+- Cloudflare public overview reports live BTC/ETH snapshots, approximately 1,000 USDso-equivalent available margin, the owner account currently flat after a separate owner-managed close, and global pause enabled.
 - Genuine `OpenInterestUpdated` BTC events matched the controlled proof rule and were rejected while paused; the public Decision Trace shows event transaction hashes, blocks, matched conditions and the no-submission result.
 - The approved production session completed authenticated save, simulation, arming and pausing. The three product templates remain present and reusable.
 - The Fly runtime derives the linked bot address `0x94d8333f14a5ED04634F0F5b7200f5c2f1D294F1`, matching the configured public address. The owner trading wallet is `0xdA80A0D2FBDEF6eEe94e2e27F82a34896B444126`.
 - The one authorized order is independently verified: transaction [`0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de`](https://explorer.testnet.somnia.network/tokyo/tx/0xdd685a4c40f5a4fd025ff50588442823e57c581cae79e38dcc0877c67da580de), block `35175637`, DreamDEX order `16472942457822639999900`, receipt `success`, one `0.004 ETH` fill at `2348.48 USDso`, indexed status `Filled`, no resting order.
-- After the broadcast, Fly is `observe` with live opt-in disabled, global pause is enabled, the temporary order-price floor secret is removed, and the public trace intent is `reconciled` with `order_state=filled`. THRYNT did not auto-close the resulting short position.
+- After the broadcast, Fly is `observe` with live opt-in disabled, global pause is enabled, the temporary order-price floor secret is removed, and the public trace intent is `reconciled` with `order_state=filled`. THRYNT did not auto-close the resulting short position. A later owner-managed close is recorded separately in the repository verification notes and is not presented as THRYNT evidence.
 
 ## Live-order evidence recorded
 
