@@ -50,6 +50,8 @@ let sdkFeedHealthy=false;
 let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
 let sdkReconnectAt=0;
+let sdkFeedEpoch=0;
+const sdkStartTimeoutMs=15_000;
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
 const sdkWatchers:{stop:()=>void}[]=[];
@@ -542,10 +544,21 @@ function refreshFeedHealth() {
 }
 
 async function startSdkFeed() {
+  const epoch=++sdkFeedEpoch;
   try {
     const handles=await Promise.all(plane.pools().map(m=>plane.client.watchMarket(m.poolAddress)));
+    if(epoch!==sdkFeedEpoch||stopped) {
+      handles.forEach(handle=>handle.stop());
+      throw new Error("Somnia SDK live-tail start was superseded");
+    }
     sdkWatchers.push(...handles);
-    sdkPerpWatcher=await plane.client.watchPerpMarkets({marginBank:plane.info("BTC").marginBank});
+    const perpWatcher=await plane.client.watchPerpMarkets({marginBank:plane.info("BTC").marginBank});
+    if(epoch!==sdkFeedEpoch||stopped) {
+      perpWatcher.stop();
+      handles.forEach(handle=>handle.stop());
+      throw new Error("Somnia SDK perp-tail start was superseded");
+    }
+    sdkPerpWatcher=perpWatcher;
     sdkLiveUnsubscribe=plane.client.subscribeLive(()=>refreshFeedHealth());
     refreshFeedHealth();
     if(!sdkFeedHealthy)throw new Error("Somnia SDK live tail did not reach a healthy state");
@@ -556,6 +569,7 @@ async function startSdkFeed() {
 }
 
 function stopSdkFeed() {
+  sdkFeedEpoch++;
   sdkLiveUnsubscribe?.();
   sdkLiveUnsubscribe=null;
   sdkPerpWatcher?.stop();
@@ -566,6 +580,27 @@ function stopSdkFeed() {
   feedHealthy=false;
 }
 
+async function startSdkFeedBounded() {
+  let timer:NodeJS.Timeout|undefined;
+  const task=startSdkFeed();
+  // A timed-out hydration may reject after the supervisor has moved on. Keep
+  // that late rejection from becoming an unhandled process-fatal error.
+  task.catch(()=>undefined);
+  try {
+    await Promise.race([
+      task,
+      new Promise<never>((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error(`Somnia SDK live-tail start exceeded ${sdkStartTimeoutMs}ms`)),sdkStartTimeoutMs);
+      }),
+    ]);
+  } catch(err) {
+    stopSdkFeed();
+    throw err;
+  } finally {
+    if(timer)clearTimeout(timer);
+  }
+}
+
 async function recoverSdkFeed() {
   if(sdkFeedHealthy)return;
   const now=Date.now();
@@ -573,7 +608,7 @@ async function recoverSdkFeed() {
   sdkReconnectAt=now;
   try {
     stopSdkFeed();
-    await startSdkFeed();
+    await startSdkFeedBounded();
     console.info("Somnia SDK live tail recovered",plane.client.getLiveStatus());
   } catch(err) {
     sdkFeedHealthy=false;feedHealthy=false;
@@ -711,7 +746,7 @@ async function main() {
     console.error("Initial reconciliation unavailable; execution remains suspended",textError(err));
   }
   try {
-    await startSdkFeed();
+    await startSdkFeedBounded();
     console.info("Somnia SDK live-tail subscriptions",{
       markets:plane.pools().length,
       perpPlane:plane.client.getPerpPlaneStatus(),
