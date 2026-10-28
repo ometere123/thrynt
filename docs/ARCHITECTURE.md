@@ -74,4 +74,8 @@ Independent hard conditions:
 
 **Fail closed** on any missing feed, unknown pool, stale oracle, Supabase outage, linked permission uncertainty, engine lease conflict or unknown transaction. Never automatically retry an order whose broadcast result is unknown. Historical logs recovered after a subscription outage may be recorded but never trigger late trades.
 
+### SDK live-tail recovery
+
+The SDK live tail is a readiness dependency, not an ornamental connection indicator. `@somnia-chain/markets-sdk@0.32.1` hydrates its watched pools and backfills live logs over the configured WebSocket transport before reporting `tailing`. Hideki can accept `eth_subscribe` requests while `eth_getLogs` is timing out; therefore a connected socket alone is insufficient evidence. The engine checks the SDK's independent indexer freshness before starting watchers, rejects unavailable or over-2,000-block hydration gaps, bounds startup at 60 seconds, and applies exponential recovery backoff up to five minutes. Cleanup failures are contained and mark the feed unhealthy. The raw HTTP poller remains a genuine observation/recovery signal, but it cannot make `/readyz` healthy or authorize signing. This preserves truthful health reporting and prevents a stale provider from becoming an execution input.
+
 All application events and decisions are offchain records. To claim cryptographic evidence of rule decisions would require additional attestations or reproducible independently captured inputs; THRYNT does not make that claim.

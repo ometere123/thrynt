@@ -8,6 +8,7 @@ import {configFromEnv} from "./config.js";
 import {decide,intentKey,prepareTrade} from "./decision.js";
 import {SomniaPlane,upToGrid} from "./markets.js";
 import {LinkedBot} from "./operator.js";
+import {sdkIndexerLagIsAcceptable,sdkMaxIndexerLagBlocks,sdkRecoveryBaseMs,sdkRecoveryDelayMs} from "./sdk-recovery.js";
 
 const config=configFromEnv();
 const api=new ThryntApi(config);
@@ -74,7 +75,10 @@ let rawFeedHealthy=true;
 let sdkFeedHealthy=false;
 let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
-let sdkReconnectAt=0;
+let sdkRecoveryFailures=0;
+let sdkNextRecoveryAt=0;
+let sdkLastError:string|null=null;
+let sdkIndexerLagBlocks:string|null=null;
 let sdkFeedEpoch=0;
 let sdkRecoveryInFlight=false;
 // Hideki's five-market SDK hydration can exceed one HTTP round-trip during
@@ -166,6 +170,14 @@ function healthPayload() {
       healedGaps:sdkTail.healedGaps,
       failure:Boolean(sdkTail.failure),
     }:null,
+    sdkRecovery:{
+      inFlight:sdkRecoveryInFlight,
+      failures:sdkRecoveryFailures,
+      nextRetryAt:sdkNextRecoveryAt||null,
+      lastError:sdkLastError,
+      indexerLagBlocks:sdkIndexerLagBlocks,
+      maxIndexerLagBlocks:sdkMaxIndexerLagBlocks.toString(),
+    },
     queued,
     seenBlock,
   };
@@ -575,6 +587,19 @@ function refreshFeedHealth() {
 async function startSdkFeed() {
   const epoch=++sdkFeedEpoch;
   try {
+    // The SDK's live tail must hydrate its historical gap before it can be
+    // considered authoritative. On Hideki, eth_subscribe may be healthy while
+    // eth_getLogs is timing out; starting five watchers in that state creates
+    // a repeated 30-second recovery storm without producing a live feed.
+    const freshness=await plane.client.getIndexerFreshness(50383);
+    const lag=freshness?.lagBlocks??null;
+    sdkIndexerLagBlocks=lag?.toString()??null;
+    if(!sdkIndexerLagIsAcceptable(lag)) {
+      throw new Error(
+        `Somnia indexer freshness unavailable or outside SDK recovery bound `+
+        `(lag=${sdkIndexerLagBlocks??"unknown"}, max=${sdkMaxIndexerLagBlocks})`,
+      );
+    }
     const handles=await Promise.all(plane.pools().map(m=>plane.client.watchMarket(m.poolAddress)));
     if(epoch!==sdkFeedEpoch||stopped) {
       handles.forEach(handle=>handle.stop());
@@ -633,8 +658,7 @@ async function startSdkFeedBounded() {
 async function recoverSdkFeed() {
   if(sdkFeedHealthy||sdkRecoveryInFlight)return;
   const now=Date.now();
-  if(now-sdkReconnectAt<30_000)return;
-  sdkReconnectAt=now;
+  if(now<sdkNextRecoveryAt)return;
   sdkRecoveryInFlight=true;
   // Do not let the previous heartbeat's healthy flag survive a feed-recovery
   // window. The API must fail closed while the SDK tail is not live.
@@ -642,10 +666,19 @@ async function recoverSdkFeed() {
   try {
     stopSdkFeed();
     await startSdkFeedBounded();
+    sdkRecoveryFailures=0;
+    sdkNextRecoveryAt=0;
+    sdkLastError=null;
     console.info("Somnia SDK live tail recovered",plane.client.getLiveStatus());
   } catch(err) {
     sdkFeedHealthy=false;feedHealthy=false;healthy=false;
-    console.error("Somnia SDK live tail unavailable; execution remains suspended",textError(err));
+    sdkRecoveryFailures++;
+    const delay=sdkRecoveryDelayMs(sdkRecoveryFailures);
+    sdkNextRecoveryAt=Date.now()+delay;
+    sdkLastError=textError(err).slice(0,240);
+    console.error("Somnia SDK live tail unavailable; execution remains suspended",{
+      error:sdkLastError,retryInMs:delay,
+    });
   } finally {
     sdkRecoveryInFlight=false;
   }
@@ -826,7 +859,12 @@ async function main() {
     });
   } catch(err) {
     sdkFeedHealthy=false;feedHealthy=false;healthy=false;
-    console.error("Initial Somnia SDK live tail unavailable; retrying in supervisor",textError(err));
+    sdkRecoveryFailures=1;
+    sdkNextRecoveryAt=Date.now()+sdkRecoveryBaseMs;
+    sdkLastError=textError(err).slice(0,240);
+    console.error("Initial Somnia SDK live tail unavailable; retrying in supervisor",{
+      error:sdkLastError,retryInMs:sdkRecoveryBaseMs,
+    });
   }
   // Load the control-plane state before starting raw-log recovery. Starting
   // the fallback poller first lets it observe an empty cache and then chase a
