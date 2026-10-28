@@ -8,7 +8,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-28. npm reported development-tree advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
 - [x] The final local run passed `npm run typecheck`, `npm test` (14 core + 7 engine tests), `npm run build`, `npm run test:e2e` (6 passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit.
-- [x] GitHub Actions run [40654103765](https://github.com/ometere123/thrynt/actions/runs/40654103765) passed for commit `e27a1dc94e2ba80b805b4186adb605646071247d`, including the bounded log-recovery, order reconciliation and Decision Trace production fixes.
+- [x] GitHub Actions run [40669784656](https://github.com/ometere123/thrynt/actions/runs/40669784656) passed for final commit `b26e1e83ff1a7340c28eb27a5152ae3edf3474cb`, including install, production audit, typecheck, unit tests, build and Playwright checks.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
 - [x] Worker denies anonymous and malformed trader authentication; the approved production session completed owner writes through the explicit `TRADER_USER_ID` allowlist. A separate valid JWT for an unapproved identity was not created solely for testing.
@@ -35,6 +35,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 - [x] A controlled Fly machine restart completed successfully with signing disabled; startup re-established the SDK tail, singleton lease and ready state. The persisted filled intent was then reconciled without a second submission.
 - [x] After the broadcast, an engine restart reconciled the persisted intent from the receipt and indexed order history without submitting another transaction; the trace records `reconciledOnRestart=true`.
 - [x] A live Hideki RPC timeout and SDK-tail abort were observed after the order; the engine withheld the heartbeat, kept signing disabled, remained fail-closed, and recovered the observation tail after restart/retry instead of broadcasting or retrying an order.
+- [x] SDK cleanup rejection containment was deployed after Hideki `eth_unsubscribe` timeouts: asynchronous cleanup errors now mark the feed unhealthy and suspend execution without crashing the process or creating a retry path.
 - [ ] Engine restart with missing hash blocks live trading until manually investigated.
 - [x] Fly is configured and scaled to one active machine; the database lease/fencing and concurrency tests are in source. A two-machine rollout was observed to be unsafe for event throughput and was immediately reduced to one.
 - [x] Global pause blocks genuine matched live events; the public trace shows `BLOCKED`/pause evidence and no new execution intent. Per-strategy pause was exercised through the approved owner workflow. The one IOC order is terminally filled and no resting order remains.
