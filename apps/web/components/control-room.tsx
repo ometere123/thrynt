@@ -645,7 +645,7 @@ export function ControlRoom() {
             <Panel title="Active orders" subtitle="Chain-head read; not an indexer approximation">
               {overview?.account?.openOrders?.length?<div className="responsive-table"><table><thead><tr><th>Market</th><th>Side</th><th>Price</th><th>Remaining</th><th>Order ID</th></tr></thead><tbody>
                 {overview.account.openOrders.map(order=><tr key={`${order.market}-${order.orderId}`}><td>{order.market}-PERP</td><td>{order.isBid?"BUY":"SELL"}</td><td>${fmt(order.priceUsd)}</td><td>{order.quantityRemaining}</td><td><code>{short(order.orderId,10)}</code></td></tr>)}
-              </tbody></table></div>:<Empty title="No active resting orders" description="The authoritative chain-head order read returned an empty book for this account." icon={Layers3}/>}
+              </tbody></table></div>:<Empty title={overview?.account?.portfolioStatus==="partial"?"Resting-order read incomplete":"No active resting orders"} description={overview?.account?.portfolioStatus==="partial"?"The chain-head order read is unavailable; this is not proof that the account has no resting orders.":"The authoritative chain-head order read returned an empty book for this account."} icon={Layers3}/>}
             </Panel>
             <Panel title="Protective exits" subtitle="Exchange-held state, never inferred from app settings">
               {overview?.account?.protectiveStops?.length?<div className="setup-list">{overview.account.protectiveStops.map((stop,index)=><div key={index}><span>{index+1}</span><p>{String(stop.market??"Perp")} · {String(stop.intent??"reduce-only")} · {String(stop.status??"PENDING")}</p></div>)}</div>:
@@ -653,7 +653,7 @@ export function ControlRoom() {
               <p className="small-note">A bot-monitored condition is not an exchange-held order. THRYNT does not present unverified protection as guaranteed.</p>
             </Panel>
           </div>
-          <div className="banner-warning space-top"><CircleAlert size={18}/> Safe close/reduce controls are unavailable until DreamDEX exposes a verified owner-authorized reduce-only route for this filled position. THRYNT will not send an ordinary opposite-side order that could increase or reverse exposure.</div>
+          <div className="banner-warning space-top"><CircleAlert size={18}/> Safe close/reduce controls are unavailable for THRYNT’s linked-bot path: DreamDEX’s <code>reduceOrderFor</code> changes the remaining quantity of a resting order, while exchange-held reduce-only TP/SL requires a separate owner-wallet stop-registry approval. THRYNT does not collect that owner signature and will not send an ordinary opposite-side order that could increase or reverse exposure.</div>
           <Panel title="Risk policy" subtitle="Applied after all AND/OR market logic">
             <div className="guard-tags">{["Owner grant verified","Account notional ceiling","Margin available","Live oracle health","Max daily actions","Cooldown","Unique intent","Uncertain TX quarantine"].map(x=>
               <span key={x}><ShieldCheck size={13}/>{x}</span>)}</div>
