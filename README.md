@@ -109,8 +109,7 @@ Copy `.env.example` into local environment variables; do **not** put real secret
 ### Deploy with Fly (after review)
 
 ```bash
-fly launch --no-deploy
-fly deploy -c apps/engine/fly.toml
+fly deploy --app thrynt-engine --config apps/engine/fly.toml --dockerfile apps/engine/Dockerfile
 fly scale count 1 -g worker
 ```
 

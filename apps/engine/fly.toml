@@ -5,7 +5,7 @@ kill_signal = "SIGTERM"
 kill_timeout = 30
 
 [build]
-  # flyctl resolves this path relative to the directory containing fly.toml;
+  # Deploy from the monorepo root with --dockerfile apps/engine/Dockerfile;
   # the build context remains the monorepo root so workspace dependencies copy correctly.
   dockerfile = "../../apps/engine/Dockerfile"
 
