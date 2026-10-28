@@ -2,7 +2,7 @@ import {
   SomniaMarkets,SOMNIA_HIDEKI_TESTNET_ADDRESSES,
   type BookTopsOnchain,type MarginAccount,type OnchainOrder,
   type PerpFeedStatus,type PerpHealthSnapshot,type PerpMaxOrderSize,
-  type PerpPosition,type PerpPositionRef,type PerpStateOnchain,
+  type PerpPosition,type PerpPositionAnalytics,type PerpPositionRef,type PerpStateOnchain,
 } from "@somnia-chain/markets-sdk";
 import {hidekiTestnet} from "@somnia-chain/markets-sdk/chains";
 import {createPublicClient,formatUnits,http} from "viem";
@@ -12,6 +12,7 @@ import type {EngineConfig} from "./config.js";
 
 export interface MarketInfo {
   poolAddress:`0x${string}`;marginBank:`0x${string}`;baseSymbol:Market;
+  stopRegistry:`0x${string}`|null;
   baseDecimals:number;quoteDecimals:number;
   tickSize:bigint;lotSize:bigint;minQuantity:bigint;
 }
@@ -44,6 +45,8 @@ type SdkHttpReads={
   getPerpState:(pool:`0x${string}`,client:PublicClient)=>Promise<PerpStateOnchain>;
   getPerpFeedStatus:(pool:`0x${string}`,client:PublicClient)=>Promise<PerpFeedStatus>;
   getPerpPosition:(ref:PerpPositionRef,client:PublicClient)=>Promise<PerpPosition>;
+  getPerpPositionAnalytics:(ref:PerpPositionRef,client:PublicClient)=>Promise<PerpPositionAnalytics>;
+  getLiquidationPrice:(ref:PerpPositionRef,client:PublicClient)=>Promise<bigint|null>;
 };
 
 // 0.32.1 keeps these connection-scoped helpers private to the SDK barrel.
@@ -63,6 +66,8 @@ const sdkHttpReads:Promise<SdkHttpReads>=Promise.all([
   getPerpState:state.getPerpState,
   getPerpFeedStatus:state.getPerpFeedStatus,
   getPerpPosition:state.getPerpPosition,
+  getPerpPositionAnalytics:margin.getPerpPositionAnalytics,
+  getLiquidationPrice:margin.getLiquidationPrice,
 } as SdkHttpReads));
 
 export class SomniaPlane {
@@ -92,6 +97,7 @@ export class SomniaPlane {
       if(!market.baseSymbol||!["BTC","ETH","SOL","XRP","DOGE"].includes(market.baseSymbol))continue;
       this.marketMap.set(market.baseSymbol as Market,{
         poolAddress:market.poolAddress,marginBank:market.marginBank,
+        stopRegistry:market.stopRegistry,
         baseSymbol:market.baseSymbol as Market,
         baseDecimals:market.baseDecimals,quoteDecimals:market.quoteDecimals,
         tickSize:BigInt(market.tickSize),lotSize:BigInt(market.lotSize),
@@ -195,6 +201,28 @@ export class SomniaPlane {
   async position(ref:{marginBank:`0x${string}`;account:`0x${string}`;pool:`0x${string}`}) {
     const reads=await sdkHttpReads;
     return reads.getPerpPosition(ref,this.httpClient);
+  }
+  async positionAnalytics(ref:{marginBank:`0x${string}`;account:`0x${string}`;pool:`0x${string}`}) {
+    const reads=await sdkHttpReads;
+    return reads.getPerpPositionAnalytics(ref,this.httpClient);
+  }
+  async liquidationPrice(ref:{marginBank:`0x${string}`;account:`0x${string}`;pool:`0x${string}`}) {
+    const reads=await sdkHttpReads;
+    return reads.getLiquidationPrice(ref,this.httpClient);
+  }
+  async openOrders() {
+    const rows=await this.sdk.client.getOpenOrdersOnchain(
+      this.pools().map(m=>m.poolAddress),this.config.owner,
+    );
+    return rows;
+  }
+  async protectiveStops() {
+    // The indexer is the only enumeration surface for the stop registry. A
+    // failure is returned to the caller rather than being converted to an
+    // empty list, so the UI cannot mistake an outage for “no protection”.
+    return this.sdk.client.listPerpStopOrders({
+      account:this.config.owner,status:["PENDING"],limit:100,
+    });
   }
   async health(pool:`0x${string}`) {
     const reads=await sdkHttpReads;

@@ -53,7 +53,8 @@ Rules follow **WHEN → IF → THEN → SAFETY → PREVIEW → ARM**.
 - Up to two condition groups; each holds up to three conditions. Groups and their conditions each support AND/OR.
 - No more than two distinct referenced perpetual markets per strategy.
 - Allowed market metrics: mark, index, premium, 8h funding, open interest, margin availability and maintenance ratio.
-- Exactly one action: bounded trade, notification or strategy pause. A reduction configuration is exposed for simulation, but **live reducing is disabled** until a true linked-bot reduce-only guarantee is verified on Hideki.
+- Exactly one action: bounded trade, notification or strategy pause. A reduction configuration is exposed for validation and simulation, but **live reducing is disabled** until a true linked-bot reduce-only guarantee is verified on Hideki.
+- Safety limits include daily and lifetime action caps, expiry, cooldown, maximum notional and total exposure. Lifetime caps are terminal per strategy version; daily caps reset by UTC day.
 - Mandatory account-level validation is always ANDed **after** user conditions; OR never bypasses safety.
 - Drafts are versioned and replayable. Arming requires a saved deterministic simulation.
 
@@ -79,7 +80,7 @@ Three templates are included: Cross-Market Confirmation, Funding Divergence and 
 - The SDK currently lacks a linked-wallet `placePerpOrderFor` method. The Fly worker uses the officially documented PerpPool `placeOrderFor` via viem, **after** SDK-based sizing and pool-level operator authorization.
 - Base decimals, min quantity, tick and lot size are market-specific.
 - Funding is a rate for the pool's calculation window; normalize to 8 hours using the reported window.
-- DreamDEX's permissioned bot can trade for a linked account, but cannot withdraw collateral or create exchange-held TP/SL on that account.
+- DreamDEX's permissioned bot can trade for a linked account, but cannot withdraw collateral or create exchange-held TP/SL on that account. The linked-bot `reduceOrderFor` route reduces a resting order's remaining quantity; it is not proof of a reduce-only close for a filled position. Hideki's ETH stop-registry route currently lacks the owner-to-registry authorization required for a safe exchange-held exit, so THRYNT blocks close/reduce submission and does not send an ordinary opposite-side order.
 
 ## Setup for local review
 
@@ -94,7 +95,7 @@ npm run dev:web
 
 Copy `.env.example` into local environment variables; do **not** put real secrets into tracked files. The web UI can run in a disconnected read-only state; it does not fabricate testnet balances or transaction IDs.
 
-1. Apply `supabase/migrations/0001_thrynt.sql` through `0005_fix_arm_strategy_version_qualification.sql` using the Supabase CLI or SQL Editor after checking the project target. Never reset an existing project.
+1. Apply `supabase/migrations/0001_thrynt.sql` through `0006_portfolio_telemetry.sql` using the Supabase CLI or SQL Editor after checking the project target. Never reset an existing project.
 2. Enable email link sign-in in Supabase Auth, authorize the correct redirect domain, sign in once, and set the resulting Supabase Auth user UUID as `TRADER_USER_ID` on Cloudflare.
 3. Deploy the Cloudflare Worker named `thrynt`, setting server-only `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `ENGINE_API_KEY`, and exact `ALLOWED_ORIGIN`.
 4. Deploy the web frontend to Vercel with the public Worker URL and Supabase publishable key.
@@ -122,11 +123,11 @@ Pass the monorepo root as Docker build context. The worker exposes only non-secr
 | Vercel | https://thrynt.vercel.app | Production deployment READY; public seven-screen dashboard verified in Chrome |
 | Cloudflare Worker | https://thrynt.delealufejoel.workers.dev | `/health` and public telemetry routes respond; owner/engine boundaries reject unauthenticated requests |
 | Fly engine | https://thrynt-engine.fly.dev | One machine in `lhr`, observation-only, `/healthz` ready and `/readyz` ready |
-| Supabase | `qpvgldadpwiipqgynxzd` | Existing `ACTIVE_HEALTHY` project; migrations 0001–0005 and Auth redirect configuration applied |
+| Supabase | `qpvgldadpwiipqgynxzd` | Existing `ACTIVE_HEALTHY` project; migrations 0001–0006 and Auth redirect configuration applied |
 
 ## Current verification boundary
 
-The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: approximately 1,000 USDso-equivalent available margin, one open `-0.004 ETH` position after the supervised IOC fill, and global pause enabled. Repeated genuine `OpenInterestUpdated` events are recorded as `BLOCKED` while the pause is active. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address and is never exposed to the browser, logs or repository.
+The current environment has been verified against Hideki RPC/GraphQL, SDK market discovery, the deployed Fly engine, and genuine pool logs from the Fly runtime. The production engine starts the SDK's snapshot-then-live tail for all five selected pools and the perp plane; its health gate requires live per-market watches, a connected SDK WebSocket and a held database lease. Hideki's public raw WebSocket path can replay late logs and occasionally time out, so receipt-backed raw trigger discovery uses bounded HTTP polling with duplicate and stale-event fencing; the SDK WebSocket remains a required health signal. The Worker public overview reports current real engine/account telemetry: approximately 1,000 USDso-equivalent available margin, one open `-0.004 ETH` position after the supervised IOC fill, current entry/mark/P&L fields, no active resting orders, and global pause enabled. Protective-stop enumeration is explicitly marked partial when the DreamDEX indexer is unavailable; an empty list is never treated as proof that no protection exists. Repeated genuine `OpenInterestUpdated` events are recorded as `BLOCKED` while the pause is active. One approved Supabase Auth identity is configured in the Cloudflare allowlist; its UUID is not stored in frontend code or this repository. The approved session completed authenticated save, simulation, arm and pause operations. The linked DreamDEX bot is authorized on all five discovered live Hideki markets by direct chain reads. The Fly `BOT_PRIVATE_KEY` secret derives the expected linked public bot address and is never exposed to the browser, logs or repository.
 
 ## Verified supervised Hideki order
 
@@ -153,6 +154,8 @@ npm run test:e2e
 npm audit --omit=dev --audit-level=high
 ```
 
+The current local run reports 15 core tests, 8 engine tests, 6 active production-browser checks on desktop/mobile, and 2 intentionally skipped owner-session checks when no Playwright storage state is supplied. A transient production edge reset was reproduced as a single failed browser request and passed on immediate isolated rerun; it is not treated as a deterministic application failure.
+
 See [the verification matrix](docs/VERIFICATION.md) before enabling live orders. Type checking and mocked deterministic tests alone are **not** evidence of a real, finalized transaction. For every actual order, verify receipt status, order ID, resting/fill state, correct owner wallet, risk preflight and explorer link.
 
 ## X posts
@@ -161,7 +164,7 @@ The MVP bounty requires two or three genuine posts about THRYNT that tag `@Dream
 
 ## Scope boundaries
 
-THRYNT is intended for **one authorized testnet owner account** with a public read-only demo. It does not host arbitrary users' private keys, make AI-selected trading decisions, guarantee profitability or provide managed money services. Signals and skip logs generated by the engine remain offchain application evidence, **not cryptographic proofs** of the evaluator's honesty. Transactions and receipts are independently verifiable.
+THRYNT is intended for **one authorized testnet owner account** with a public read-only demo. It does not host arbitrary users' private keys, make AI-selected trading decisions, guarantee profitability or provide managed money services. Filled-position reduction and exchange-held TP/SL remain blocked until DreamDEX exposes a verified owner-authorized route for the linked execution model; the UI states this limitation instead of presenting an unsafe close button. Signals and skip logs generated by the engine remain offchain application evidence, **not cryptographic proofs** of the evaluator's honesty. Transactions and receipts are independently verifiable.
 
 ## Primary references
 

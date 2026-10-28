@@ -58,6 +58,9 @@ export const RuleSchema = z.object({
   limits: z.object({
     maxNotionalUsd: z.number().positive().max(1000),
     maxDailyActions: z.number().int().min(1).max(20),
+    // Older persisted rules omit this field; the bounded default keeps them
+    // safe while new versions persist an explicit lifetime cap.
+    maxLifetimeActions: z.number().int().min(1).max(100).default(20),
     cooldownSeconds: z.number().int().min(30).max(86400),
     maxDataAgeSeconds: z.number().int().min(5).max(120),
     minAvailableMarginUsd: z.number().min(0).max(100000),

@@ -41,7 +41,13 @@ type Trace={
 };
 type AccountState={
   observedAt:string;equityUsd:number;availableMarginUsd:number;lockedMarginUsd:number;
-  marginStatus:string;positions:{market:string;size:string;markUsd:number;notionalUsd:number}[];
+  marginStatus:string;portfolioStatus?:"authoritative"|"partial"|"unavailable";asOfBlock?:string|null;
+  positions:{market:string;size:string;markUsd:number;notionalUsd:number;entryPriceUsd?:number|null;
+    unrealizedPnlUsd?:number;accruedFundingUsd?:number;equityContributionUsd?:number;
+    liquidationPriceUsd?:number|null;priceable?:boolean;asOfBlock?:string}[];
+  openOrders?:{market:string;orderId:string;isBid:boolean;priceUsd:number;quantity:string;
+    quantityRemaining:string;expireTimestampNs:string;asOfBlock:string}[];
+  protectiveStops?:Record<string,unknown>[];
 };
 type StrategyRow={
   id:string;name:string;state:string;current_version:number;
@@ -515,10 +521,11 @@ export function ControlRoom() {
                     ["maxTotalExposureUsd","Max total exposure (USD)"],
                     ["minAvailableMarginUsd","Min free margin (USD)"],
                     ["maxDailyActions","Max actions / UTC day"],
+                    ["maxLifetimeActions","Max lifetime actions"],
                     ["cooldownSeconds","Cooldown (seconds)"],
                     ["maxDataAgeSeconds","Max observed data age (sec)"],
                   ] as const).map(([key,label])=><label className="field" key={key}><span>{label}</span>
-                    <input type="number" min={0} value={draft.limits[key]} onChange={e=>update(r=>{
+                    <input type="number" min={0} value={draft.limits[key]??20} onChange={e=>update(r=>{
                       r.limits[key]=Number(e.target.value);return r;})}/></label>)}
                   <label className="field field-wide"><span>Expiry (UTC)</span><input type="datetime-local"
                     value={utcDateTimeInput(draft.limits.expiresAt)}
@@ -626,12 +633,27 @@ export function ControlRoom() {
           </div>
           <Panel title="Current positions" subtitle="From live account reads — no simulated holdings">
             {overview?.account?.positions.length?<div className="responsive-table"><table><thead><tr>
-              <th>Market</th><th>Signed position</th><th>Mark</th><th>Notional</th>
+              <th>Market</th><th>Signed position</th><th>Entry / mark</th><th>Notional</th><th>Unrealized P&amp;L</th><th>Liquidation estimate</th>
             </tr></thead><tbody>{overview.account.positions.map(p=><tr key={p.market}>
-              <td>{p.market}-PERP</td><td>{p.size}</td><td>${fmt(p.markUsd)}</td>
-              <td>${fmt(p.notionalUsd)}</td></tr>)}</tbody></table></div>:
+              <td><b>{p.market}-PERP</b><small className="table-sub">{Number(p.size)<0?"SHORT":"LONG"}</small></td>
+              <td>{p.size}</td><td>${fmt(p.entryPriceUsd??undefined)} / ${fmt(p.markUsd)}</td>
+              <td>${fmt(p.notionalUsd)}</td><td>{p.unrealizedPnlUsd===undefined?"—":`${p.unrealizedPnlUsd<0?"-":""}$${fmt(Math.abs(p.unrealizedPnlUsd))}`}</td>
+              <td>{p.liquidationPriceUsd===undefined||p.liquidationPriceUsd===null?"Unavailable":`$${fmt(p.liquidationPriceUsd)}`}</td></tr>)}</tbody></table></div>:
               <Empty title="No verified open positions" description="Positions appear only after the live engine publishes MarginBank account state." icon={Wallet2}/>}
           </Panel>
+          <div className="two-column">
+            <Panel title="Active orders" subtitle="Chain-head read; not an indexer approximation">
+              {overview?.account?.openOrders?.length?<div className="responsive-table"><table><thead><tr><th>Market</th><th>Side</th><th>Price</th><th>Remaining</th><th>Order ID</th></tr></thead><tbody>
+                {overview.account.openOrders.map(order=><tr key={`${order.market}-${order.orderId}`}><td>{order.market}-PERP</td><td>{order.isBid?"BUY":"SELL"}</td><td>${fmt(order.priceUsd)}</td><td>{order.quantityRemaining}</td><td><code>{short(order.orderId,10)}</code></td></tr>)}
+              </tbody></table></div>:<Empty title="No active resting orders" description="The authoritative chain-head order read returned an empty book for this account." icon={Layers3}/>}
+            </Panel>
+            <Panel title="Protective exits" subtitle="Exchange-held state, never inferred from app settings">
+              {overview?.account?.protectiveStops?.length?<div className="setup-list">{overview.account.protectiveStops.map((stop,index)=><div key={index}><span>{index+1}</span><p>{String(stop.market??"Perp")} · {String(stop.intent??"reduce-only")} · {String(stop.status??"PENDING")}</p></div>)}</div>:
+                <Empty title="No exchange-held TP/SL discovered" description={overview?.account?.portfolioStatus==="partial"?"The stop indexer is unavailable; this is not proof that no protection exists.":"No pending reduce-only stop is indexed for the account."} icon={ShieldCheck}/>}
+              <p className="small-note">A bot-monitored condition is not an exchange-held order. THRYNT does not present unverified protection as guaranteed.</p>
+            </Panel>
+          </div>
+          <div className="banner-warning space-top"><CircleAlert size={18}/> Safe close/reduce controls are unavailable until DreamDEX exposes a verified owner-authorized reduce-only route for this filled position. THRYNT will not send an ordinary opposite-side order that could increase or reverse exposure.</div>
           <Panel title="Risk policy" subtitle="Applied after all AND/OR market logic">
             <div className="guard-tags">{["Owner grant verified","Account notional ceiling","Margin available","Live oracle health","Max daily actions","Cooldown","Unique intent","Uncertain TX quarantine"].map(x=>
               <span key={x}><ShieldCheck size={13}/>{x}</span>)}</div>

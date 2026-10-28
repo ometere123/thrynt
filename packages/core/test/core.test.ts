@@ -106,6 +106,18 @@ describe("Strategy Studio core", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.blockedBy).toEqual(expect.arrayContaining(["LOW_MARGIN","NOTIONAL_LIMIT","EXPOSURE_LIMIT","DAILY_LIMIT","COOLDOWN"]));
   });
+  it("enforces a finite lifetime action limit independently of the daily limit",()=>{
+    const rule=example();
+    rule.limits.maxDailyActions=20;
+    rule.limits.maxLifetimeActions=1;
+    const now=Date.now();
+    const decision=checkRisk(rule,{nowMs:now,armed:true,engineHealthy:true,marketObservedAtMs:now,
+      linkedBotPermission:true,availableMarginUsd:100,currentExposureUsd:0,proposedNotionalUsd:10,
+      actionsToday:0,actionsLifetime:1,marketPriceable:true,duplicate:false});
+    expect(decision.allowed).toBe(false);
+    expect(decision.blockedBy).toContain("LIFETIME_LIMIT");
+    expect(decision.blockedBy).not.toContain("DAILY_LIMIT");
+  });
   it("requires an actual position before allowing reduction",()=>{
     const rule=example();rule.action={kind:"reduce",market:"ETH",percent:50,slippageBps:0};
     const now=Date.now();

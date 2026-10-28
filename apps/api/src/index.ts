@@ -51,6 +51,9 @@ app.get("/v1/public/overview",async c=>{
       availableMarginUsd:Number(account.data.available_margin_usd),
       lockedMarginUsd:Number(account.data.locked_margin_usd),
       marginStatus:account.data.margin_status,positions:account.data.positions,
+      openOrders:account.data.open_orders??[],protectiveStops:account.data.protective_stops??[],
+      portfolioStatus:account.data.portfolio_status??"authoritative",
+      asOfBlock:account.data.as_of_block??null,
     }:null,
   });
 });
@@ -228,14 +231,31 @@ app.post("/v1/engine/account",async c=>{
     positions:z.array(z.object({
       market:z.string().max(15),size:z.string().max(100),
       markUsd:z.number().finite().nonnegative(),notionalUsd:z.number().finite().nonnegative(),
+      entryPriceUsd:z.number().finite().nonnegative().nullable().optional(),
+      unrealizedPnlUsd:z.number().finite().optional(),accruedFundingUsd:z.number().finite().optional(),
+      equityContributionUsd:z.number().finite().optional(),liquidationPriceUsd:z.number().finite().nonnegative().nullable().optional(),
+      priceable:z.boolean().optional(),asOfBlock:z.string().regex(/^\d+$/).optional(),
     })).max(50),
+    openOrders:z.array(z.object({
+      market:z.string().max(15),orderId:z.string().max(80),isBid:z.boolean(),
+      priceUsd:z.number().finite().nonnegative(),quantity:z.string().max(100),quantityRemaining:z.string().max(100),
+      expireTimestampNs:z.string().max(100),asOfBlock:z.string().regex(/^\d+$/),
+    })).max(200).default([]),
+    protectiveStops:z.array(z.record(z.string(),z.unknown())).max(200).default([]),
+    portfolioStatus:z.enum(["authoritative","partial","unavailable"]),
+    asOfBlock:z.string().regex(/^\d+$/),
   });
   const p=schema.safeParse(await c.req.json().catch(()=>null));
-  if(!p.success)return c.json(errorReply("Invalid account metrics"),422);
+  if(!p.success){
+    console.error("account telemetry rejected",p.error.issues.map(issue=>({path:issue.path,message:issue.message})));
+    return c.json(errorReply("Invalid account metrics"),422);
+  }
   const {error}=await db(c.env).from("account_snapshots").upsert({
     singleton:true,observed_at:p.data.observedAt,equity_usd:p.data.equityUsd,
     available_margin_usd:p.data.availableMarginUsd,locked_margin_usd:p.data.lockedMarginUsd,
-    margin_status:p.data.marginStatus,positions:p.data.positions,updated_at:new Date().toISOString(),
+    margin_status:p.data.marginStatus,positions:p.data.positions,open_orders:p.data.openOrders,
+    protective_stops:p.data.protectiveStops,portfolio_status:p.data.portfolioStatus,
+    as_of_block:p.data.asOfBlock,updated_at:new Date().toISOString(),
   });
   if(error)return c.json(errorReply("Account state not stored"),503);
   return c.json({ok:true});
@@ -322,12 +342,18 @@ app.get("/v1/engine/activity/:id",async c=>{
   if(!uuid.safeParse(id).success)return c.json(errorReply("Bad strategy id"),400);
   const now=new Date();
   const start=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate())).toISOString();
-  const {data,error}=await db(c.env).from("execution_intents")
-    .select("created_at,decisions!inner(strategy_id)")
-    .eq("decisions.strategy_id",id).gte("created_at",start)
-    .order("created_at",{ascending:false}).limit(21);
-  if(error)return c.json(errorReply("Activity lookup failed"),503);
-  return c.json({actionsToday:data?.length??0,lastActionAt:data?.[0]?.created_at??null});
+  const conn=db(c.env);
+  const [today,latest,lifetime]=await Promise.all([
+    conn.from("execution_intents").select("id,decisions!inner(strategy_id)",{count:"exact",head:true})
+      .eq("decisions.strategy_id",id).gte("created_at",start),
+    conn.from("execution_intents").select("created_at,decisions!inner(strategy_id)")
+      .eq("decisions.strategy_id",id).order("created_at",{ascending:false}).limit(1),
+    conn.from("execution_intents").select("id,decisions!inner(strategy_id)",{count:"exact",head:true})
+      .eq("decisions.strategy_id",id),
+  ]);
+  if(today.error||latest.error||lifetime.error)return c.json(errorReply("Activity lookup failed"),503);
+  return c.json({actionsToday:today.count??0,actionsLifetime:lifetime.count??0,
+    lastActionAt:latest.data?.[0]?.created_at??null});
 });
 app.get("/v1/engine/unresolved",async c=>{
   const {data,error}=await db(c.env).from("execution_intents")

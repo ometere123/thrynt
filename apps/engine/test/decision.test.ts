@@ -52,4 +52,14 @@ describe("order preparation",()=>{
     const book={blockNumber:99n,bestBid:parseUnits("3999",18),bestAsk:null};
     expect(()=>prepareTrade(rule,input,info,0n,book)).toThrow("No executable long side");
   });
+  it("keeps the short notional ceiling tied to the fresh bid, not the lower sell floor",()=>{
+    const book={blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:parseUnits("4001",18)};
+    const p=prepareTrade(templates()[0]!,input,info,0n,book);
+    expect(p.notionalUsd).toBeCloseTo(16,8);
+    expect(Number(formatUnitsForTest(p.price))).toBeLessThanOrEqual(4000);
+  });
 });
+
+function formatUnitsForTest(value:bigint) {
+  return Number(value)/1e18;
+}

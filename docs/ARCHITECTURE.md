@@ -45,6 +45,10 @@ sequenceDiagram
 - **Confirmed**: transaction succeeded onchain, which does not imply the full order filled.
 - **Unknown**: send/reconciliation uncertainty, requires investigation before new live trading.
 
+### Entry versus position management
+
+Entry uses the verified linked-bot `placeOrderFor` route after the independent risk gateway and durable intent reservation. Position management is a separate authority boundary: DreamDEX's linked-bot `reduceOrderFor` reduces a resting order, not a filled perpetual position. The ETH Hideki stop registry was read directly and the owner-to-registry placement authorization was not enabled during verification. THRYNT therefore exposes authoritative position and order telemetry, but blocks close/reduce broadcasts and does not emulate reduce-only with an opposite-side order. Exchange-held TP/SL or bot-monitored exits can only be enabled after the exact owner-authorized reduce-only mechanism is proven and reconciled.
+
 Live order history must distinguish successful resting orders, partial fills, canceled orders, IOC no-fill reverts, and failed receipts using indexed history and/or pool logs. The public trace may initially show only a receipt summary until reconciliation is validated.
 
 ## Risk rules

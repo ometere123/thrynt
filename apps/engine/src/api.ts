@@ -34,7 +34,7 @@ export class ThryntApi {
   account(snapshot:unknown){return this.request("/v1/engine/account",snapshot);}
   event(value:unknown){return this.request("/v1/engine/event",value);}
   decision(value:unknown){return this.request<{id:string;created:boolean}>("/v1/engine/decision",value);}
-  activity(id:string){return this.request<{actionsToday:number;lastActionAt:string|null}>(`/v1/engine/activity/${id}`);}
+  activity(id:string){return this.request<{actionsToday:number;actionsLifetime:number;lastActionAt:string|null}>(`/v1/engine/activity/${id}`);}
   reserve(value:unknown){return this.request<{created:boolean;id:string|null;reason?:string}>("/v1/engine/intent",value);}
   intentStatus(id:string,value:unknown){return this.request(`/v1/engine/intent/${id}/status`,value);}
   unresolved(){return this.request<{intents:{id:string;status:string;tx_hash:string|null;order_id:string|null;result:Record<string,unknown>;action:Record<string,unknown>;pool_address:string|null;created_at:string}[]}>("/v1/engine/unresolved");}

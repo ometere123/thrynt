@@ -64,6 +64,8 @@ type Event={
   txHash:`0x${string}`;blockNumber:bigint;logIndex:number;observedAt:string;
 };
 let stopped=false;
+let cachedProtectiveStops:Record<string,unknown>[]=[];
+let protectiveStopsObservedAt=0;
 let leased=false;
 let leaseGeneration:string|null=null;
 let healthy=false;
@@ -321,7 +323,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     marketObservedAtMs:oldest,linkedBotPermission:permission,
     availableMarginUsd:Number(formatUnits(account.unlockedCollateralBalance,market.quoteDecimals)),
     currentExposureUsd:exposure,proposedNotionalUsd:order.notionalUsd,
-    actionsToday:activity.actionsToday,
+    actionsToday:activity.actionsToday,actionsLifetime:activity.actionsLifetime,
     lastActionAtMs:activity.lastActionAt?Date.parse(activity.lastActionAt):undefined,
     marketPriceable:sizing.priceable&&sizing.placeable&&order.quantity<=sizing.maxQuantity,
     duplicate:false,reduciblePositionSize:Number(position<0n?-position:position),
@@ -690,25 +692,59 @@ async function publishAccount() {
   const first=plane.pools()[0];
   if(!first)return;
   const data=await plane.marginAccount(first.marginBank,config.owner);
-  const positions:{market:string;size:string;markUsd:number;notionalUsd:number}[]=[];
+  const positions:{market:string;size:string;markUsd:number;notionalUsd:number;
+    entryPriceUsd:number|null;unrealizedPnlUsd:number;accruedFundingUsd:number;
+    equityContributionUsd:number;liquidationPriceUsd:number|null;priceable:boolean;asOfBlock:string}[]=[];
   for(const active of data.activePerpPools) {
     const pool=plane.pools().find(m=>m.poolAddress.toLowerCase()===active.toLowerCase());
     if(!pool)throw new Error("Unknown pool holds account collateral");
-    const [position,price]=await Promise.all([
-      plane.position({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}),
-      plane.health(pool.poolAddress),
+    const [analytics,liquidation]=await Promise.all([
+      plane.positionAnalytics({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}),
+      plane.liquidationPrice({marginBank:pool.marginBank,account:config.owner,pool:pool.poolAddress}).catch(()=>null),
     ]);
-    if(!price.priceable)throw new Error("Active pool oracle unavailable");
-    const size=Number(formatUnits(position.size,pool.baseDecimals));
-    const markUsd=Number(formatUnits(price.markPrice,18));
-    positions.push({market:pool.baseSymbol,size:size.toString(),markUsd,notionalUsd:Math.abs(size)*markUsd});
+    if(!analytics.priceable)throw new Error("Active pool oracle unavailable");
+    if(analytics.size===0n)continue;
+    const size=Number(formatUnits(analytics.size,pool.baseDecimals));
+    const markUsd=Number(formatUnits(analytics.markPrice,pool.quoteDecimals));
+    positions.push({market:pool.baseSymbol,size:size.toString(),markUsd,notionalUsd:Number(formatUnits(analytics.notional,pool.quoteDecimals)),
+      entryPriceUsd:Number(formatUnits(analytics.avgEntryPrice,pool.quoteDecimals)),
+      unrealizedPnlUsd:Number(formatUnits(analytics.unrealizedPnl,pool.quoteDecimals)),
+      accruedFundingUsd:Number(formatUnits(analytics.accruedFunding,pool.quoteDecimals)),
+      equityContributionUsd:Number(formatUnits(analytics.equityContribution,pool.quoteDecimals)),
+      liquidationPriceUsd:liquidation===null?null:Number(formatUnits(liquidation,pool.quoteDecimals)),
+      priceable:true,asOfBlock:analytics.asOfBlock.toString()});
   }
+  const openOrders=await plane.openOrders();
+  const openOrderRows=openOrders.orders.map(order=>{
+    const market=plane.pools().find(m=>m.poolAddress.toLowerCase()===order.pool.toLowerCase());
+    if(!market)throw new Error("Unknown pool in open-order read");
+    return {market:market.baseSymbol,orderId:order.orderId.toString(),isBid:order.isBid,
+      priceUsd:Number(formatUnits(order.price,market.quoteDecimals)),quantity:formatUnits(order.fullQuantity,market.baseDecimals),
+      quantityRemaining:formatUnits(order.quantityRemaining,market.baseDecimals),expireTimestampNs:order.expireTimestampNs.toString(),
+      asOfBlock:openOrders.blockNumber.toString()};
+  });
+  let portfolioStatus:"authoritative"|"partial"="authoritative";
+  if(Date.now()-protectiveStopsObservedAt>60_000) {
+    try {
+      const refreshed=await Promise.race([
+        plane.protectiveStops(),
+        new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error("protective stop index timeout")),5_000)),
+      ]);
+      cachedProtectiveStops=refreshed as unknown as Record<string,unknown>[];
+      protectiveStopsObservedAt=Date.now();
+    } catch(err) {
+      portfolioStatus="partial";
+      console.warn("Protective stop index unavailable; no empty-list claim",textError(err));
+    }
+  }
+  const protectiveStops=cachedProtectiveStops;
   await api.account({
     observedAt:new Date().toISOString(),
     equityUsd:Number(formatUnits(data.equity,first.quoteDecimals)),
     availableMarginUsd:Number(formatUnits(data.unlockedCollateralBalance,first.quoteDecimals)),
     lockedMarginUsd:Number(formatUnits(data.lockedCollateral,first.quoteDecimals)),
-    marginStatus:String(data.marginStatus),positions,
+    marginStatus:String(data.marginStatus),positions,openOrders:openOrderRows,protectiveStops,
+    portfolioStatus,asOfBlock:openOrders.blockNumber.toString(),
   });
 }
 async function publishMarkets() {

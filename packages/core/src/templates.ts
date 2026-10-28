@@ -2,7 +2,7 @@ import type {Rule} from "./schema.js";
 
 const expiry = () => new Date(Date.now() + 3 * 86400_000).toISOString();
 const limits = () => ({
-  maxNotionalUsd: 100, maxDailyActions: 3, cooldownSeconds: 300,
+  maxNotionalUsd: 100, maxDailyActions: 3, maxLifetimeActions: 20, cooldownSeconds: 300,
   maxDataAgeSeconds: 30, minAvailableMarginUsd: 25,
   maxTotalExposureUsd: 300, expiresAt: expiry(),
 });

@@ -7,7 +7,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 ## Static checks
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-28. npm reported development-tree advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
-- [x] The final local run passed `npm run typecheck`, `npm test` (14 core + 7 engine tests), `npm run build`, `npm run test:e2e` (6 passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit.
+- [x] The final local run passed `npm run typecheck`, `npm test` (15 core + 8 engine tests), `npm run build`, `npm run test:e2e` (6 active checks passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit. One transient production edge reset was reproduced as a single failed browser request and passed on immediate isolated rerun.
 - [x] GitHub Actions run [40669784656](https://github.com/ometere123/thrynt/actions/runs/40669784656) passed for final commit `b26e1e83ff1a7340c28eb27a5152ae3edf3474cb`, including install, production audit, typecheck, unit tests, build and Playwright checks.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
@@ -24,7 +24,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 - [x] After a Hideki SDK `eth_blockNumber` read timeout, authoritative snapshots/order-book/margin/sizing reads were moved to the pinned SDK 0.32.1 read helpers over the configured Hideki HTTP RPC. The SDK WebSocket tail remains a separate required health signal; failed HTTP reads still fail closed.
 - [x] Two-market observation reads current mark/index/funding state through the SDK at evaluation time; account state is read from MarginBank rather than fabricated UI values.
 - [x] A captured event includes a real transaction hash, block and log index; receipt lookup remains a required pre-signing/reconciliation gate.
-- [x] Direct MarginBank read reports 1,000 USDso-equivalent equity/available margin, zero locked collateral, zero active positions and `Healthy`; the same real values are published by the Fly engine and Worker.
+- [x] Direct MarginBank read reports approximately 1,000 USDso-equivalent equity/available margin, zero locked collateral and `Healthy`; current published telemetry also includes the independently read `-0.004 ETH` position, entry/mark/P&L fields and chain-head order state.
 - [x] Funding normalization uses the SDK-reported `fundingWindowSec`; current Hideki reads report the documented 28,800-second window and are normalized to 8 hours.
 - [x] Trade precision is read from each discovered pool and applied with bigint tick/lot/minimum checks; current authoritative reads cover BTC's 8 and ETH's 18 base decimals and the CI order-preparation tests.
 - [x] Linked-bot permission is verified onchain for place, cancel and reduce selectors on all five discovered Hideki markets; the DreamDEX UI shows `Perps - every market`.
@@ -40,6 +40,9 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 - [x] Fly is configured and scaled to one active machine; the database lease/fencing and concurrency tests are in source. A two-machine rollout was observed to be unsafe for event throughput and was immediately reduced to one.
 - [x] Global pause blocks genuine matched live events; the public trace shows `BLOCKED`/pause evidence and no new execution intent. Per-strategy pause was exercised through the approved owner workflow. The one IOC order is terminally filled and no resting order remains.
 - [x] Post-order safety state was verified on 2026-10-28: Fly `mode=observe`, `liveOptIn=false`, one leased/healthy machine with `wsConnected=true`, Cloudflare `global_pause=true`, the controlled strategy remains armed but cannot submit while paused, and the public trace contains exactly one reconciled transaction intent for the supervised order. The temporary authorized sell-floor secret was removed.
+- [x] Lifetime action caps are now stored in immutable rule versions and enforced independently of the daily UTC counter; the regression test covers a terminal lifetime rejection.
+- [x] Chain-head open orders and SDK position analytics are published as account telemetry; protective-stop enumeration is bounded and reports `partial` on indexer failure rather than claiming an empty protection set.
+- [ ] Filled-position reduction and exchange-held TP/SL are not enabled: direct Hideki reads show the bot's `reduce` permission, but the documented `reduceOrderFor` route targets resting orders and the ETH stop-registry owner authorization is not enabled. THRYNT remains fail-closed and the frontend does not transmit an ordinary opposite-side close.
 
 ## End-to-end UX
 

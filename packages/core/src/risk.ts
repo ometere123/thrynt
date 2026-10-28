@@ -3,7 +3,7 @@ import type {Rule} from "./schema.js";
 export type RiskCode =
   | "PAUSED" | "EXPIRED" | "STALE_MARKET" | "NO_PERMISSION"
   | "LOW_MARGIN" | "EXPOSURE_LIMIT" | "NOTIONAL_LIMIT" | "DAILY_LIMIT"
-  | "COOLDOWN" | "ENGINE_UNHEALTHY" | "UNPRICEABLE" | "DUPLICATE"
+  | "LIFETIME_LIMIT" | "COOLDOWN" | "ENGINE_UNHEALTHY" | "UNPRICEABLE" | "DUPLICATE"
   | "NO_POSITION" | "SIZE_INVALID";
 export interface RiskInput {
   nowMs: number;
@@ -15,6 +15,7 @@ export interface RiskInput {
   currentExposureUsd: number;
   proposedNotionalUsd: number;
   actionsToday: number;
+  actionsLifetime?: number;
   lastActionAtMs?: number;
   marketPriceable: boolean;
   duplicate: boolean;
@@ -42,6 +43,10 @@ export function checkRisk(rule: Rule, input: RiskInput): RiskDecision {
     blockedBy.push("EXPOSURE_LIMIT");
   if (!Number.isInteger(input.actionsToday)||input.actionsToday < 0||
       input.actionsToday >= rule.limits.maxDailyActions) blockedBy.push("DAILY_LIMIT");
+  const lifetimeLimit=rule.limits.maxLifetimeActions??20;
+  if (input.actionsLifetime !== undefined &&
+      (!Number.isInteger(input.actionsLifetime)||input.actionsLifetime < 0||
+      input.actionsLifetime >= lifetimeLimit)) blockedBy.push("LIFETIME_LIMIT");
   if (input.lastActionAtMs !== undefined &&
       (!Number.isFinite(input.lastActionAtMs)||
       input.nowMs-input.lastActionAtMs < rule.limits.cooldownSeconds*1000))
