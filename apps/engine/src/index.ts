@@ -49,6 +49,7 @@ let rawFeedHealthy=true;
 let sdkFeedHealthy=false;
 let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
+let sdkReconnectAt=0;
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
 const sdkWatchers:{stop:()=>void}[]=[];
@@ -565,6 +566,21 @@ function stopSdkFeed() {
   feedHealthy=false;
 }
 
+async function recoverSdkFeed() {
+  if(sdkFeedHealthy)return;
+  const now=Date.now();
+  if(now-sdkReconnectAt<30_000)return;
+  sdkReconnectAt=now;
+  try {
+    stopSdkFeed();
+    await startSdkFeed();
+    console.info("Somnia SDK live tail recovered",plane.client.getLiveStatus());
+  } catch(err) {
+    sdkFeedHealthy=false;feedHealthy=false;
+    console.error("Somnia SDK live tail unavailable; execution remains suspended",textError(err));
+  }
+}
+
 async function reconcileUnresolved() {
   const {intents}=await api.unresolved();
   for(const intent of intents) {
@@ -655,6 +671,7 @@ async function supervise() {
       leaseGeneration=leased?lease.generation:null;
       if(!leased){healthy=false;console.error("Lost singleton signing lease");}
       else {
+        await recoverSdkFeed();
         await refreshState();
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
@@ -687,13 +704,23 @@ async function main() {
   leased=lease.acquired&&Boolean(lease.generation);
   leaseGeneration=leased?lease.generation:null;
   if(!leased)throw new Error("Another engine instance holds the lease");
-  healthy=await reconcileUnresolved();
-  await startSdkFeed();
-  console.info("Somnia SDK live-tail subscriptions",{
-    markets:plane.pools().length,
-    perpPlane:plane.client.getPerpPlaneStatus(),
-    status:plane.client.getLiveStatus(),
-  });
+  try {
+    healthy=await reconcileUnresolved();
+  } catch(err) {
+    healthy=false;
+    console.error("Initial reconciliation unavailable; execution remains suspended",textError(err));
+  }
+  try {
+    await startSdkFeed();
+    console.info("Somnia SDK live-tail subscriptions",{
+      markets:plane.pools().length,
+      perpPlane:plane.client.getPerpPlaneStatus(),
+      status:plane.client.getLiveStatus(),
+    });
+  } catch(err) {
+    sdkFeedHealthy=false;feedHealthy=false;
+    console.error("Initial Somnia SDK live tail unavailable; retrying in supervisor",textError(err));
+  }
   // Load the control-plane state before starting raw-log recovery. Starting
   // the fallback poller first lets it observe an empty cache and then chase a
   // backlog while the first heartbeat is still in flight. On Hideki that can
@@ -701,11 +728,16 @@ async function main() {
   // The initial state read is a fail-closed startup gate, so the poller is
   // anchored at the current head only after its market/event subscription is
   // known.
-  await refreshState();
-  console.info("Initial execution state loaded",{
-    strategyCount:cachedState?.strategies.length??0,
-    loadedAt:new Date(cachedStateAt).toISOString(),
-  });
+  try {
+    await refreshState();
+    console.info("Initial execution state loaded",{
+      strategyCount:cachedState?.strategies.length??0,
+      loadedAt:new Date(cachedStateAt).toISOString(),
+    });
+  } catch(err) {
+    cachedState=null;cachedStateAt=0;healthy=false;
+    console.error("Initial control-plane state unavailable; retrying in supervisor",textError(err));
+  }
   watchAllPools();
   console.info("Onchain pool log subscriptions",stopWatchers.length);
   await supervise();
