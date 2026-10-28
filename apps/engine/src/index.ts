@@ -76,6 +76,7 @@ let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
 let sdkReconnectAt=0;
 let sdkFeedEpoch=0;
+let sdkRecoveryInFlight=false;
 // Hideki's five-market SDK hydration can exceed one HTTP round-trip during
 // indexer/RPC load. This remains a bounded startup gate: a feed that does not
 // become live within the window keeps execution suspended.
@@ -630,10 +631,11 @@ async function startSdkFeedBounded() {
 }
 
 async function recoverSdkFeed() {
-  if(sdkFeedHealthy)return;
+  if(sdkFeedHealthy||sdkRecoveryInFlight)return;
   const now=Date.now();
   if(now-sdkReconnectAt<30_000)return;
   sdkReconnectAt=now;
+  sdkRecoveryInFlight=true;
   // Do not let the previous heartbeat's healthy flag survive a feed-recovery
   // window. The API must fail closed while the SDK tail is not live.
   healthy=false;feedHealthy=false;
@@ -644,6 +646,8 @@ async function recoverSdkFeed() {
   } catch(err) {
     sdkFeedHealthy=false;feedHealthy=false;healthy=false;
     console.error("Somnia SDK live tail unavailable; execution remains suspended",textError(err));
+  } finally {
+    sdkRecoveryInFlight=false;
   }
 }
 
@@ -771,7 +775,10 @@ async function supervise() {
       leaseGeneration=leased?lease.generation:null;
       if(!leased){healthy=false;console.error("Lost singleton signing lease");}
       else {
-        await recoverSdkFeed();
+        // SDK hydration/recovery is bounded but may still take longer than the
+        // heartbeat interval on Hideki. Do not starve raw onchain recovery or
+        // authoritative read publication while that auxiliary feed retries.
+        void recoverSdkFeed();
         await refreshState();
         seenBlock=(await publicClient.getBlockNumber()).toString();
         const clean=await reconcileUnresolved();
