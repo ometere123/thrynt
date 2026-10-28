@@ -76,7 +76,10 @@ let sdkTail:TailStatus|null=null;
 let seenBlock:string|null=null;
 let sdkReconnectAt=0;
 let sdkFeedEpoch=0;
-const sdkStartTimeoutMs=15_000;
+// Hideki's five-market SDK hydration can exceed one HTTP round-trip during
+// indexer/RPC load. This remains a bounded startup gate: a feed that does not
+// become live within the window keeps execution suspended.
+const sdkStartTimeoutMs=60_000;
 let queued=0;
 const stopWatchers:(()=>void)[]=[];
 const sdkWatchers:{stop:()=>void}[]=[];

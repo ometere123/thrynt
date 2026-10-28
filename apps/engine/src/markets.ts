@@ -1,6 +1,7 @@
 import {
   SomniaMarkets,SOMNIA_HIDEKI_TESTNET_ADDRESSES,
   type BookTopsOnchain,type MarginAccount,type OnchainOrder,
+  type OpenOrdersOnchain,
   type PerpFeedStatus,type PerpHealthSnapshot,type PerpMaxOrderSize,
   type PerpPosition,type PerpPositionAnalytics,type PerpPositionRef,type PerpStateOnchain,
 } from "@somnia-chain/markets-sdk";
@@ -35,6 +36,7 @@ export function upToGrid(value:bigint,step:bigint):bigint {
 
 type SdkHttpReads={
   getBookTopsOnchain:(markets:{id:string;poolAddress:`0x${string}`}[],client:PublicClient)=>Promise<BookTopsOnchain>;
+  getOpenOrdersOnchain:(pools:`0x${string}`[],owner:`0x${string}`,client:PublicClient)=>Promise<OpenOrdersOnchain>;
   getOrderOnchain:(pool:`0x${string}`,orderId:bigint,client:PublicClient)=>Promise<OnchainOrder|null>;
   getMarginAccount:(marginBank:`0x${string}`,account:`0x${string}`,client:PublicClient)=>Promise<MarginAccount>;
   getMaxPerpOrderSize:(params:{
@@ -59,6 +61,7 @@ const sdkHttpReads:Promise<SdkHttpReads>=Promise.all([
   import(new URL("./perp/state.js",sdkDist).href),
 ]).then(([orders,margin,state])=>({
   getBookTopsOnchain:orders.getBookTopsOnchain,
+  getOpenOrdersOnchain:orders.getOpenOrdersOnchain,
   getOrderOnchain:orders.getOrderOnchain,
   getMarginAccount:margin.getMarginAccount,
   getMaxPerpOrderSize:margin.getMaxPerpOrderSize,
@@ -211,10 +214,14 @@ export class SomniaPlane {
     return reads.getLiquidationPrice(ref,this.httpClient);
   }
   async openOrders() {
-    const rows=await this.sdk.client.getOpenOrdersOnchain(
-      this.pools().map(m=>m.poolAddress),this.config.owner,
+    // Account-scoped getOwnOpenOrders calls have repeatedly exceeded Hideki's
+    // WebSocket RPC deadline. Keep the live tail on the SDK socket, but route
+    // this one-shot authoritative account snapshot through the engine's HTTP
+    // client so a slow account read cannot tear down the SDK feed or lease.
+    const reads=await sdkHttpReads;
+    return reads.getOpenOrdersOnchain(
+      this.pools().map(m=>m.poolAddress),this.config.owner,this.httpClient,
     );
-    return rows;
   }
   async protectiveStops() {
     // The indexer is the only enumeration surface for the stop registry. A
