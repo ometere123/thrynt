@@ -57,11 +57,27 @@ app.get("/v1/public/overview",async c=>{
 app.get("/v1/public/traces",async c=>{
   const requestedLimit=Number(c.req.query("limit")??"120");
   const limit=Number.isInteger(requestedLimit)&&requestedLimit>0?Math.min(requestedLimit,200):120;
-  const {data,error}=await db(c.env).from("decisions")
-    .select("id,status,recorded_at,strategy_id,strategy_version_id,evaluation,risk,market_events(market,kind,block_number,transaction_hash),strategy_versions(strategy_id,version),execution_intents(id,status,tx_hash,order_id,result,receipt_status,accepted,order_state,reconciled_at)")
-    .order("recorded_at",{ascending:false}).limit(limit);
-  if (error) return c.json(errorReply("History unavailable"),503);
-  return c.json({traces:data??[],explorer:"https://explorer.testnet.somnia.network/tokyo"});
+  const select="id,status,recorded_at,strategy_id,strategy_version_id,evaluation,risk,market_events(market,kind,block_number,transaction_hash),strategy_versions(strategy_id,version),execution_intents(id,status,tx_hash,order_id,result,receipt_status,accepted,order_state,reconciled_at)";
+  const conn=db(c.env);
+  const [recent,intents]=await Promise.all([
+    conn.from("decisions").select(select).order("recorded_at",{ascending:false}).limit(limit),
+    // Keep a small, bounded evidence index so a real order does not disappear
+    // from the public ledger when a high-frequency event stream produces more
+    // than the recent window. This returns identifiers only; the decision
+    // payload is still fetched through the same redacted select below.
+    conn.from("execution_intents").select("decision_id").not("tx_hash","is",null)
+      .order("created_at",{ascending:false}).limit(50),
+  ]);
+  if (recent.error||intents.error) return c.json(errorReply("History unavailable"),503);
+  const evidenceIds=[...new Set((intents.data??[]).map(row=>row.decision_id).filter(Boolean))];
+  const evidence=evidenceIds.length
+    ? await conn.from("decisions").select(select).in("id",evidenceIds)
+    : {data:[],error:null};
+  if (evidence.error) return c.json(errorReply("History unavailable"),503);
+  const byId=new Map<string,typeof recent.data[number]>();
+  for(const row of [...(recent.data??[]),...(evidence.data??[])])byId.set(row.id,row);
+  const traces=[...byId.values()].sort((a,b)=>Date.parse(b.recorded_at)-Date.parse(a.recorded_at));
+  return c.json({traces,explorer:"https://explorer.testnet.somnia.network/tokyo"});
 });
 
 app.use("/v1/owner/*",async(c,next)=>{
