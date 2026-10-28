@@ -31,7 +31,7 @@ app.get("/health",c=>c.json({ok:true,service:"thrynt-api",chainId:50383}));
 app.get("/v1/public/overview",async c=>{
   const conn=db(c.env);
   const [engine,markets,decisions,strategies,account]=await Promise.all([
-    conn.from("engine_status").select("global_pause,last_heartbeat,current_block,observed_chain_id,lease_generation").eq("singleton",true).single(),
+    conn.from("engine_status").select("global_pause,last_heartbeat,current_block,observed_chain_id,lease_generation,error").eq("singleton",true).single(),
     conn.from("market_snapshots").select("symbol,block_number,observed_at,metrics").order("symbol"),
     conn.from("decisions").select("id,status,recorded_at").order("recorded_at",{ascending:false}).limit(12),
     conn.from("strategies").select("state"),
@@ -41,7 +41,7 @@ app.get("/v1/public/overview",async c=>{
     return c.json(errorReply("Public telemetry unavailable"),503);
   const last=engine.data?.last_heartbeat;
   return c.json({
-    engine:{healthy:Boolean(last&&Date.now()-Date.parse(last)<90_000&&engine.data?.observed_chain_id===50383),
+    engine:{healthy:Boolean(last&&Date.now()-Date.parse(last)<90_000&&engine.data?.observed_chain_id===50383&&!engine.data?.error),
       paused:engine.data?.global_pause??true,block:engine.data?.current_block??null},
     markets:markets.data??[],strategyCounts:{armed:(strategies.data??[]).filter(s=>s.state==="armed").length,
       total:strategies.data?.length??0},
