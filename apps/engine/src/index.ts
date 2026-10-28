@@ -28,6 +28,29 @@ const publicClient=createPublicClient({
 });
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const textError=(err:unknown)=>err instanceof Error?err.message:String(err);
+
+// Hideki's SDK can reject a WebSocket unsubscribe after a live-tail reset has
+// already returned. Node treats an otherwise-unhandled rejection as a fatal
+// exception, which would restart the engine in the middle of recovery. Keep
+// the process alive, mark the feed unhealthy, and let the supervisor recover;
+// all signing gates remain closed while this flag is false.
+process.on("unhandledRejection",reason=>{
+  sdkFeedHealthy=false;
+  feedHealthy=false;
+  healthy=false;
+  console.error("Unhandled promise rejection; execution remains suspended",textError(reason));
+});
+
+function invokeSdkCleanup(action:()=>unknown,label:string) {
+  try {
+    const result=action() as {catch?: (handler:(reason:unknown)=>unknown)=>unknown}|undefined;
+    if(result&&typeof result.catch==="function")
+      void result.catch(err=>console.error(`${label} failed`,textError(err)));
+  } catch(err) {
+    console.error(`${label} failed`,textError(err));
+  }
+}
+
 const acceptableEvents=new Set(["FundingUpdated","OpenInterestUpdated","OrderPlaced"]);
 const rawMaxCatchupBlocks=256n;
 // Hideki's HTTP log endpoint is materially slower than its chain head. A
@@ -570,12 +593,12 @@ async function startSdkFeed() {
 
 function stopSdkFeed() {
   sdkFeedEpoch++;
-  sdkLiveUnsubscribe?.();
+  invokeSdkCleanup(()=>sdkLiveUnsubscribe?.(),"SDK live listener cleanup");
   sdkLiveUnsubscribe=null;
-  sdkPerpWatcher?.stop();
+  invokeSdkCleanup(()=>sdkPerpWatcher?.stop(),"SDK perp watcher cleanup");
   sdkPerpWatcher=null;
-  while(sdkWatchers.length)sdkWatchers.pop()?.stop();
-  try {plane.client.stopLive();} catch(err) {console.error("SDK live-tail shutdown failed",textError(err));}
+  while(sdkWatchers.length)invokeSdkCleanup(()=>sdkWatchers.pop()?.stop(),"SDK market watcher cleanup");
+  invokeSdkCleanup(()=>plane.client.stopLive(),"SDK live-tail shutdown");
   sdkFeedHealthy=false;
   feedHealthy=false;
 }
