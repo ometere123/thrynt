@@ -8,7 +8,7 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-28. npm reported development-tree advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
 - [x] The final local run passed `npm run typecheck`, `npm test` (15 core + 8 engine tests), `npm run build`, `npm run test:e2e` (6 active checks passed, 2 intentionally skipped without an injected authenticated storage state), and the production-only audit. One transient production edge reset was reproduced as a single failed browser request and passed on immediate isolated rerun.
-- [x] GitHub Actions run [40669784656](https://github.com/ometere123/thrynt/actions/runs/40669784656) passed for final commit `b26e1e83ff1a7340c28eb27a5152ae3edf3474cb`, including install, production audit, typecheck, unit tests, build and Playwright checks.
+- [x] GitHub Actions run [40703200840](https://github.com/ometere123/thrynt/actions/runs/40703200840) passed for final commit `4a94ad0c27da520cf0d96d5f115884e9add8b9ad`, including install, production audit, typecheck, unit tests, build and Playwright checks.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
 - [x] Worker denies anonymous and malformed trader authentication; the approved production session completed owner writes through the explicit `TRADER_USER_ID` allowlist. A separate valid JWT for an unapproved identity was not created solely for testing.
