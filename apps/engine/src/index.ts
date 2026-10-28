@@ -634,12 +634,15 @@ async function recoverSdkFeed() {
   const now=Date.now();
   if(now-sdkReconnectAt<30_000)return;
   sdkReconnectAt=now;
+  // Do not let the previous heartbeat's healthy flag survive a feed-recovery
+  // window. The API must fail closed while the SDK tail is not live.
+  healthy=false;feedHealthy=false;
   try {
     stopSdkFeed();
     await startSdkFeedBounded();
     console.info("Somnia SDK live tail recovered",plane.client.getLiveStatus());
   } catch(err) {
-    sdkFeedHealthy=false;feedHealthy=false;
+    sdkFeedHealthy=false;feedHealthy=false;healthy=false;
     console.error("Somnia SDK live tail unavailable; execution remains suspended",textError(err));
   }
 }
@@ -815,7 +818,7 @@ async function main() {
       status:plane.client.getLiveStatus(),
     });
   } catch(err) {
-    sdkFeedHealthy=false;feedHealthy=false;
+    sdkFeedHealthy=false;feedHealthy=false;healthy=false;
     console.error("Initial Somnia SDK live tail unavailable; retrying in supervisor",textError(err));
   }
   // Load the control-plane state before starting raw-log recovery. Starting
