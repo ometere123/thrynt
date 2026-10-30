@@ -126,6 +126,14 @@ describe("Strategy Studio core", () => {
       actionsToday:0,marketPriceable:true,duplicate:false,reduciblePositionSize:0});
     expect(decision.blockedBy).toContain("NO_POSITION");
   });
+  it("uses the effective reducing capacity rather than a stale full position size",()=>{
+    const rule=example();rule.action={kind:"reduce",market:"ETH",percent:100,slippageBps:0};
+    const now=Date.now();
+    const decision=checkRisk(rule,{nowMs:now,armed:true,engineHealthy:true,marketObservedAtMs:now,
+      linkedBotPermission:true,availableMarginUsd:100,currentExposureUsd:0,proposedNotionalUsd:10,
+      actionsToday:0,marketPriceable:true,duplicate:false,reduciblePositionSize:0.003});
+    expect(decision.allowed).toBe(true);
+  });
   it("rejects duplicate condition IDs and post-only slippage", () => {
     const rule = structuredClone(example());
     rule.groups[0]!.conditions[0]!.id = rule.groups[0]!.conditions[1]?.id ?? "same";

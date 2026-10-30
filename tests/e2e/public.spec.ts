@@ -34,6 +34,14 @@ test.describe("public THRYNT shell",()=>{
     await expect(page.getByRole("heading",{name:"Markets",exact:true})).toBeVisible();
   });
 
+  test("positions screen labels the owner-assisted protection boundary",async({page})=>{
+    await page.goto("/");
+    await openScreen(page,"Positions & Risk");
+    await expect(page.getByRole("heading",{name:"Owner-held protection workflow",exact:true})).toBeVisible();
+    await expect(page.getByText(/THRYNT never requests or stores that private key/)).toBeVisible();
+    await expect(page.getByText(/opposite-side IOC/)).toBeVisible();
+  });
+
   test("owner API rejects anonymous and malformed bearer credentials",async({request})=>{
     const anonymous=await request.get(`${apiBase}/v1/owner/strategies`);
     expect(anonymous.status()).toBe(401);

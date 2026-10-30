@@ -1,6 +1,6 @@
 # THRYNT — DreamDEX Perps Builder Bounty submission pack
 
-Status as of 2026-10-28: the repository, public demo, real Hideki event ingestion, safety-rejection evidence and one supervised DreamDEX order lifecycle are ready for review. The order was broadcast exactly once under a bounded owner authorization, filled, independently reconciled and shut down safely. No X URL is fabricated in this document.
+Status as of 2026-10-30: the repository, public demo, real Hideki event ingestion, safety-rejection evidence and one supervised DreamDEX order lifecycle are ready for review. The order was broadcast exactly once under a bounded owner authorization, filled, independently reconciled and shut down safely. The Fly SDK tail has recovered from the earlier Hideki/indexer degradation; a bounded production sample reported ready with six watches, a connected WebSocket, no SDK failure and 19-block indexer lag. No X URL is fabricated in this document.
 
 ## Official MVP requirements checked
 
@@ -34,7 +34,7 @@ THRYNT is an event-driven DreamDEX perpetuals automation and decision-audit syst
 
 ## Evidence available now
 
-- Fly `/readyz` reports chain 50383, one held lease, `mode: observe`, `liveOptIn: false`, `wsConnected: true`, six SDK watch lanes, fresh block progress and healed gaps.
+- Fly `/readyz` reports chain 50383, one held lease, `mode: observe`, `liveOptIn: false`, `wsConnected: true`, six SDK watch lanes, fresh block progress and healed gaps. This is a bounded observation; if Hideki `eth_getLogs` or indexer freshness degrades, `/readyz` returns `503` and signing remains disabled.
 - Cloudflare public overview reports live BTC/ETH snapshots, approximately 1,000 USDso-equivalent available margin, the owner account currently flat after a separate owner-managed close, and global pause enabled.
 - Genuine `OpenInterestUpdated` BTC events matched the controlled proof rule and were rejected while paused; the public Decision Trace shows event transaction hashes, blocks, matched conditions and the no-submission result.
 - The approved production session completed authenticated save, simulation, arming and pausing. The three product templates remain present and reusable.

@@ -6,7 +6,7 @@ import {
   type PerpPosition,type PerpPositionAnalytics,type PerpPositionRef,type PerpStateOnchain,
 } from "@somnia-chain/markets-sdk";
 import {hidekiTestnet} from "@somnia-chain/markets-sdk/chains";
-import {createPublicClient,formatUnits,http} from "viem";
+import {createPublicClient,formatUnits,http,parseAbi} from "viem";
 import type {PublicClient} from "viem";
 import type {Market,MetricSnapshot} from "@thrynt/core";
 import type {EngineConfig} from "./config.js";
@@ -22,6 +22,30 @@ export interface OrderBookTop {
   bestBid:bigint|null;
   bestAsk:bigint|null;
 }
+export interface ReducingCapacity {
+  positionSize:bigint;
+  pendingBidQuantity:bigint;
+  pendingAskQuantity:bigint;
+  pendingOppositeQuantity:bigint;
+  effectiveReducingCapacity:bigint;
+  asOfBlock:bigint;
+}
+export interface ProtectionRead {
+  registry:`0x${string}`|null;
+  ownerApproval:boolean|null;
+  asOfBlock:bigint;
+}
+
+// These signatures are copied from the pinned SDK's readsAbi.ts and trade ABI,
+// then used over the engine's HTTP client so account snapshots do not depend on
+// the SDK's slower live-tail socket reads.
+const REDUCING_CAPACITY_ABI=parseAbi([
+  "function getReducingCapacity(address account) view returns ((int128 positionSize, uint256 pendingBidQuantity, uint256 pendingAskQuantity, uint256 pendingOppositeQuantity, uint256 effectiveReducingCapacity) capacity)",
+]);
+const OPERATOR_AUTH_ABI=parseAbi([
+  "function isOperatorAuthorized(address owner,address operator,bytes4 selector) view returns (bool)",
+]);
+const PLACE_ORDER_FOR_SELECTOR="0x80054449" as const;
 export function numberRaw(raw:bigint|string,decimals:number):number {
   return Number(formatUnits(BigInt(raw),decimals));
 }
@@ -184,11 +208,33 @@ export class SomniaPlane {
     return total;
   }
   async reducible(symbol:Market) {
+    return (await this.reducingCapacity(symbol)).positionSize;
+  }
+  async reducingCapacity(symbol:Market):Promise<ReducingCapacity> {
     const m=this.info(symbol);
-    const position=await this.position({
-      marginBank:m.marginBank,account:this.config.owner,pool:m.poolAddress,
+    const asOfBlock=await this.httpClient.getBlockNumber();
+    const capacity=await this.httpClient.readContract({
+      address:m.poolAddress,abi:REDUCING_CAPACITY_ABI,
+      functionName:"getReducingCapacity",args:[this.config.owner],blockNumber:asOfBlock,
     });
-    return BigInt(position.size);
+    return {
+      positionSize:capacity.positionSize,
+      pendingBidQuantity:capacity.pendingBidQuantity,
+      pendingAskQuantity:capacity.pendingAskQuantity,
+      pendingOppositeQuantity:capacity.pendingOppositeQuantity,
+      effectiveReducingCapacity:capacity.effectiveReducingCapacity,
+      asOfBlock,
+    };
+  }
+  async protection(symbol:Market):Promise<ProtectionRead> {
+    const m=this.info(symbol);
+    const asOfBlock=await this.httpClient.getBlockNumber();
+    if(!m.stopRegistry)return {registry:null,ownerApproval:null,asOfBlock};
+    const ownerApproval=await this.httpClient.readContract({
+      address:m.poolAddress,abi:OPERATOR_AUTH_ABI,functionName:"isOperatorAuthorized",
+      args:[this.config.owner,m.stopRegistry,PLACE_ORDER_FOR_SELECTOR],blockNumber:asOfBlock,
+    });
+    return {registry:m.stopRegistry,ownerApproval:Boolean(ownerApproval),asOfBlock};
   }
   async marginAccount(marginBank:`0x${string}`,account:`0x${string}`) {
     const reads=await sdkHttpReads;

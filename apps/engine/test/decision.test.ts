@@ -2,6 +2,7 @@ import {describe,expect,it} from "vitest";
 import {templates} from "@thrynt/core";
 import {parseUnits} from "viem";
 import {intentKey,prepareTrade} from "../src/decision.js";
+import {planBestEffortClose} from "../src/position-management.js";
 
 describe("order preparation",()=>{
   const input={market:"ETH" as const,observedAt:new Date().toISOString(),blockNumber:"99",
@@ -57,6 +58,32 @@ describe("order preparation",()=>{
     const p=prepareTrade(templates()[0]!,input,info,0n,book);
     expect(p.notionalUsd).toBeCloseTo(16,8);
     expect(Number(formatUnitsForTest(p.price))).toBeLessThanOrEqual(4000);
+  });
+  it("caps a best-effort short close at live reducing capacity",()=>{
+    const plan=planBestEffortClose({
+      positionSize:-parseUnits("0.004",18),
+      effectiveReducingCapacity:parseUnits("0.003",18),percent:100,maxSlippageBps:15,
+      book:{blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:parseUnits("4001",18)},info,
+    });
+    expect(plan.side).toBe("long");
+    expect(plan.quantity).toBe(parseUnits("0.003",18));
+    expect(plan.guaranteedReduceOnly).toBe(false);
+    expect(plan.reversalRisk).toBe("possible-if-position-changes-before-fill");
+  });
+  it("rejects a close when the executable side is empty",()=>{
+    expect(()=>planBestEffortClose({
+      positionSize:-parseUnits("0.004",18),effectiveReducingCapacity:parseUnits("0.004",18),
+      percent:100,maxSlippageBps:15,
+      book:{blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:null},info,
+    })).toThrow("No executable long side");
+  });
+  it("rejects a close that would fall below the market minimum after lot alignment",()=>{
+    expect(()=>planBestEffortClose({
+      positionSize:-parseUnits("0.004",18),effectiveReducingCapacity:parseUnits("0.0009",18),
+      percent:50,maxSlippageBps:15,
+      book:{blockNumber:99n,bestBid:parseUnits("4000",18),bestAsk:parseUnits("4001",18)},
+      info:{...info,minQuantity:parseUnits("0.001",18)},
+    })).toThrow("Close quantity below market minimum");
   });
 });
 

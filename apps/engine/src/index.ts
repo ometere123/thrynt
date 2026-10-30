@@ -265,7 +265,8 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
   const snap=snaps.find(x=>x.market===action.market);
   if(!snap)throw new Error("Action market snapshot unavailable");
   const market=plane.info(action.market);
-  const position=action.kind==="reduce"?await plane.reducible(action.market):0n;
+  const reduction=action.kind==="reduce"?await plane.reducingCapacity(action.market):null;
+  const position=reduction?.positionSize??0n;
   let book;
   try {book=await plane.topOfBook(action.market);}
   catch(err) {
@@ -285,7 +286,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     return;
   }
   let order;
-  try {order=prepareTrade(rule,snap,market,position,book);}
+  try {order=prepareTrade(rule,snap,market,position,book,reduction?.effectiveReducingCapacity);}
   catch(err) {
     await record(s,versionId,event,"blocked",evaluation,{blockedBy:["SIZE_INVALID"],detail:textError(err)});
     return;
@@ -342,7 +343,7 @@ async function processStrategy(s:StoredStrategy,event:Event,status:{global_pause
     actionsToday:activity.actionsToday,actionsLifetime:activity.actionsLifetime,
     lastActionAtMs:activity.lastActionAt?Date.parse(activity.lastActionAt):undefined,
     marketPriceable:sizing.priceable&&sizing.placeable&&order.quantity<=sizing.maxQuantity,
-    duplicate:false,reduciblePositionSize:Number(position<0n?-position:position),
+    duplicate:false,reduciblePositionSize:Number(reduction?.effectiveReducingCapacity??(position<0n?-position:position)),
   });
   if(!risk.allowed) {
     await record(s,versionId,event,"blocked",evaluation,{
@@ -737,7 +738,10 @@ async function publishAccount() {
   const data=await plane.marginAccount(first.marginBank,config.owner);
   const positions:{market:string;size:string;markUsd:number;notionalUsd:number;
     entryPriceUsd:number|null;unrealizedPnlUsd:number;accruedFundingUsd:number;
-    equityContributionUsd:number;liquidationPriceUsd:number|null;priceable:boolean;asOfBlock:string}[]=[];
+    equityContributionUsd:number;liquidationPriceUsd:number|null;priceable:boolean;asOfBlock:string;
+    reducibleQuantity?:string;reductionCapacityAsOfBlock?:string;stopRegistry?:string|null;
+    stopRegistryAuthorized?:boolean|null;protectionState?:"no_position"|"protection_confirmed"|"protection_not_found"|"protection_unknown"|"protection_unavailable";
+    protectionReason?:string;closeRoute?:"disabled_best_effort_ioc"}[]=[];
   for(const active of data.activePerpPools) {
     const pool=plane.pools().find(m=>m.poolAddress.toLowerCase()===active.toLowerCase());
     if(!pool)throw new Error("Unknown pool holds account collateral");
@@ -781,6 +785,42 @@ async function publishAccount() {
     }
   }
   const protectiveStops=cachedProtectiveStops;
+  for(const position of positions) {
+    const symbol=position.market as Market;
+    try {
+      const [capacity,protection]=await Promise.all([
+        plane.reducingCapacity(symbol),plane.protection(symbol),
+      ]);
+      const hasStop=protectiveStops.some(stop=>{
+        const marketValue=stop.market as Record<string,unknown>|undefined;
+        return stop.baseSymbol===symbol||marketValue?.baseSymbol===symbol||marketValue?.symbol===symbol;
+      });
+      position.reducibleQuantity=formatUnits(capacity.effectiveReducingCapacity,plane.info(symbol).baseDecimals);
+      position.reductionCapacityAsOfBlock=capacity.asOfBlock.toString();
+      position.stopRegistry=protection.registry;
+      position.stopRegistryAuthorized=protection.ownerApproval;
+      position.closeRoute="disabled_best_effort_ioc";
+      if(portfolioStatus==="partial") {
+        position.protectionState="protection_unknown";
+        position.protectionReason="Stop enumeration is unavailable; an empty list is not proof of no protection.";
+      } else if(hasStop) {
+        position.protectionState="protection_confirmed";
+        position.protectionReason="A pending exchange-held stop was returned by the DreamDEX stop index.";
+      } else if(!protection.registry) {
+        position.protectionState="protection_unavailable";
+        position.protectionReason="This market has no discovered stop registry.";
+      } else {
+        position.protectionState="protection_not_found";
+        position.protectionReason=protection.ownerApproval
+          ?"The owner has authorized the stop registry, but no pending stop was indexed."
+          :"Owner approval for this market stop registry is not present; THRYNT cannot sign on the owner's behalf.";
+      }
+    } catch(err) {
+      position.protectionState="protection_unknown";
+      position.protectionReason=`Authoritative protection read failed: ${textError(err).slice(0,180)}`;
+      position.closeRoute="disabled_best_effort_ioc";
+    }
+  }
   await api.account({
     observedAt:new Date().toISOString(),
     equityUsd:Number(formatUnits(data.equity,first.quoteDecimals)),

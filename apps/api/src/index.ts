@@ -235,6 +235,11 @@ app.post("/v1/engine/account",async c=>{
       unrealizedPnlUsd:z.number().finite().optional(),accruedFundingUsd:z.number().finite().optional(),
       equityContributionUsd:z.number().finite().optional(),liquidationPriceUsd:z.number().finite().nonnegative().nullable().optional(),
       priceable:z.boolean().optional(),asOfBlock:z.string().regex(/^\d+$/).optional(),
+      reducibleQuantity:z.string().max(100).optional(),reductionCapacityAsOfBlock:z.string().regex(/^\d+$/).optional(),
+      stopRegistry:z.string().regex(/^0x[a-fA-F0-9]{40}$/).nullable().optional(),
+      stopRegistryAuthorized:z.boolean().nullable().optional(),
+      protectionState:z.enum(["no_position","protection_confirmed","protection_not_found","protection_unknown","protection_unavailable"]).optional(),
+      protectionReason:z.string().max(240).optional(),closeRoute:z.literal("disabled_best_effort_ioc").optional(),
     })).max(50),
     openOrders:z.array(z.object({
       market:z.string().max(15),orderId:z.string().max(80),isBid:z.boolean(),

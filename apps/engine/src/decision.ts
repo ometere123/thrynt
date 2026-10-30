@@ -12,7 +12,7 @@ export interface PreparedOrder {
 }
 export function prepareTrade(
   rule:Rule,snapshot:MetricSnapshot,info:MarketInfo,
-  reduciblePosition=0n,book?:OrderBookTop,
+  reduciblePosition=0n,book?:OrderBookTop,effectiveReducingCapacity?:bigint,
 ):PreparedOrder {
   const action=rule.action;
   if(action.kind!=="trade"&&action.kind!=="reduce")throw new Error("No exchange order action");
@@ -27,7 +27,10 @@ export function prepareTrade(
     if(reduciblePosition===0n)throw new Error("Nothing to reduce");
     side=reduciblePosition>0n?"short":"long";
     const abs=reduciblePosition<0n?-reduciblePosition:reduciblePosition;
-    quantity=abs*BigInt(action.percent)/100n;
+    const capacity=effectiveReducingCapacity===undefined||effectiveReducingCapacity>abs
+      ?abs:effectiveReducingCapacity;
+    if(capacity<=0n)throw new Error("No reducing capacity");
+    quantity=capacity*BigInt(action.percent)/100n;
   }
   if(info.lotSize<=0n||info.tickSize<=0n)throw new Error("Market grid invalid");
   quantity=quantity/info.lotSize*info.lotSize;

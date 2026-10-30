@@ -44,7 +44,10 @@ type AccountState={
   marginStatus:string;portfolioStatus?:"authoritative"|"partial"|"unavailable";asOfBlock?:string|null;
   positions:{market:string;size:string;markUsd:number;notionalUsd:number;entryPriceUsd?:number|null;
     unrealizedPnlUsd?:number;accruedFundingUsd?:number;equityContributionUsd?:number;
-    liquidationPriceUsd?:number|null;priceable?:boolean;asOfBlock?:string}[];
+    liquidationPriceUsd?:number|null;priceable?:boolean;asOfBlock?:string;
+    reducibleQuantity?:string;reductionCapacityAsOfBlock?:string;stopRegistry?:string|null;
+    stopRegistryAuthorized?:boolean|null;protectionState?:"no_position"|"protection_confirmed"|"protection_not_found"|"protection_unknown"|"protection_unavailable";
+    protectionReason?:string;closeRoute?:"disabled_best_effort_ioc"}[];
   openOrders?:{market:string;orderId:string;isBid:boolean;priceUsd:number;quantity:string;
     quantityRemaining:string;expireTimestampNs:string;asOfBlock:string}[];
   protectiveStops?:Record<string,unknown>[];
@@ -57,6 +60,13 @@ const short=(s:string|null|undefined,n=11)=>s?s.length>n+6?`${s.slice(0,n)}…${
 const fmt=(n:number|undefined,digits=2)=>n===undefined?"—":new Intl.NumberFormat("en-US",{
   minimumFractionDigits:digits,maximumFractionDigits:digits,
 }).format(n);
+const protectionLabel=(state:AccountState["positions"][number]["protectionState"])=>{
+  if(state==="protection_confirmed")return {label:"Exchange protected",tone:"green" as const};
+  if(state==="protection_unknown")return {label:"Protection unknown",tone:"amber" as const};
+  if(state==="protection_unavailable")return {label:"Unavailable",tone:"red" as const};
+  if(state==="protection_not_found")return {label:"Not found",tone:"amber" as const};
+  return {label:"No position",tone:"neutral" as const};
+};
 const ago=(iso:string|null|undefined)=>{
   if(!iso)return "No observations";
   const sec=Math.max(0,Math.round((Date.now()-Date.parse(iso))/1000));
@@ -633,12 +643,13 @@ export function ControlRoom() {
           </div>
           <Panel title="Current positions" subtitle="From live account reads — no simulated holdings">
             {overview?.account?.positions.length?<div className="responsive-table"><table><thead><tr>
-              <th>Market</th><th>Signed position</th><th>Entry / mark</th><th>Notional</th><th>Unrealized P&amp;L</th><th>Liquidation estimate</th>
+              <th>Market</th><th>Signed position</th><th>Entry / mark</th><th>Notional</th><th>Unrealized P&amp;L</th><th>Liquidation estimate</th><th>Protection</th>
             </tr></thead><tbody>{overview.account.positions.map(p=><tr key={p.market}>
               <td><b>{p.market}-PERP</b><small className="table-sub">{Number(p.size)<0?"SHORT":"LONG"}</small></td>
               <td>{p.size}</td><td>${fmt(p.entryPriceUsd??undefined)} / ${fmt(p.markUsd)}</td>
               <td>${fmt(p.notionalUsd)}</td><td>{p.unrealizedPnlUsd===undefined?"—":`${p.unrealizedPnlUsd<0?"-":""}$${fmt(Math.abs(p.unrealizedPnlUsd))}`}</td>
-              <td>{p.liquidationPriceUsd===undefined||p.liquidationPriceUsd===null?"Unavailable":`$${fmt(p.liquidationPriceUsd)}`}</td></tr>)}</tbody></table></div>:
+              <td>{p.liquidationPriceUsd===undefined||p.liquidationPriceUsd===null?"Unavailable":`$${fmt(p.liquidationPriceUsd)}`}</td>
+              <td>{(()=>{const x=protectionLabel(p.protectionState);return <><Pill tone={x.tone}>{x.label}</Pill><small className="table-sub">{p.protectionReason??"Authoritative state pending"}</small></>;})()}</td></tr>)}</tbody></table></div>:
               <Empty title="No verified open positions" description="Positions appear only after the live engine publishes MarginBank account state." icon={Wallet2}/>}
           </Panel>
           <div className="two-column">
@@ -653,7 +664,16 @@ export function ControlRoom() {
               <p className="small-note">A bot-monitored condition is not an exchange-held order. THRYNT does not present unverified protection as guaranteed.</p>
             </Panel>
           </div>
-          <div className="banner-warning space-top"><CircleAlert size={18}/> Safe close/reduce controls are unavailable for THRYNT’s linked-bot path: DreamDEX’s <code>reduceOrderFor</code> changes the remaining quantity of a resting order, while exchange-held reduce-only TP/SL requires a separate owner-wallet stop-registry approval. THRYNT does not collect that owner signature and will not send an ordinary opposite-side order that could increase or reverse exposure.</div>
+          <Panel title="Owner-held protection workflow" subtitle="Protocol-enforced TP/SL requires the DreamDEX owner wallet">
+            <div className="setup-list">
+              <div><span>01</span><p>Choose TP and SL prices against the verified live position and market tick grid.</p></div>
+              <div><span>02</span><p>In DreamDEX, authorize the market’s stop registry and sign the linked reduce-only bracket with the owner wallet. THRYNT never requests or stores that private key.</p></div>
+              <div><span>03</span><p>Refresh THRYNT. The engine reads the registry approval, pending stop IDs and status from authoritative chain/indexer sources.</p></div>
+            </div>
+            <a className="external" href="https://app.testnet.dreamdex.io" target="_blank" rel="noopener noreferrer">Open DreamDEX testnet protection controls <ExternalLink size={14}/></a>
+            {overview?.account?.positions.length?<p className="small-note space-top">Current position protection is reported per market above. An approval alone is not a bracket; THRYNT only labels protection confirmed after pending exchange-held stops are discovered.</p>:<p className="small-note space-top">The account is currently flat, so no protection can be active. This workflow becomes actionable after a verified position exists.</p>}
+          </Panel>
+          <div className="banner-warning space-top"><CircleAlert size={18}/> DreamDEX’s linked-bot close pattern is an opposite-side IOC, not a protocol-guaranteed reduce-only instruction. THRYNT includes a tested, capacity-capped planner but keeps broadcasting disabled by default because a position change between the capacity read and fill can reduce, close or reverse exposure. <code>reduceOrderFor</code> only changes a resting order’s remaining quantity.</div>
           <Panel title="Risk policy" subtitle="Applied after all AND/OR market logic">
             <div className="guard-tags">{["Owner grant verified","Account notional ceiling","Margin available","Live oracle health","Max daily actions","Cooldown","Unique intent","Uncertain TX quarantine"].map(x=>
               <span key={x}><ShieldCheck size={13}/>{x}</span>)}</div>
