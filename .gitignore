@@ -17,6 +17,11 @@ test-results/
 docs/assets/demo/*.webm
 !docs/assets/demo/thrynt-main-browser-capture.webm
 !docs/assets/demo/thrynt-social-cut.webm
+docs/assets/demo/final/main-*
+docs/assets/demo/final/social-*
+docs/assets/demo/final/main.txt
+docs/assets/demo/final/social.txt
+docs/assets/demo/final/review.png
 
 .vercel
 .env*
