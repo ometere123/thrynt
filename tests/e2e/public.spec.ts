@@ -3,6 +3,11 @@ import {expect,test,type Page} from "@playwright/test";
 const screens=["Overview","Strategy Studio","Markets","Live Pulse","Positions & Risk","Decision Trace","Settings"] as const;
 const apiBase=process.env.THRYNT_E2E_API_URL??"https://thrynt.delealufejoel.workers.dev";
 
+async function loadShell(page:Page) {
+  await page.goto("/",{waitUntil:"domcontentloaded",timeout:45_000});
+  await expect(page.getByRole("heading",{name:"Overview",exact:true})).toBeVisible({timeout:30_000});
+}
+
 async function openScreen(page:Page,name:string) {
   const nav=page.getByRole("button",{name,exact:true});
   const openNavigation=page.getByRole("button",{name:"Open navigation",exact:true});
@@ -17,8 +22,7 @@ async function openScreen(page:Page,name:string) {
 
 test.describe("public THRYNT shell",()=>{
   test("guest can inspect all seven screens without owner mutation",async({page})=>{
-    await page.goto("/");
-    await expect(page.getByRole("heading",{name:"Overview",exact:true})).toBeVisible();
+    await loadShell(page);
     for(const screen of screens)await openScreen(page,screen);
 
     await openScreen(page,"Strategy Studio");
@@ -27,7 +31,7 @@ test.describe("public THRYNT shell",()=>{
   });
 
   test("guest navigation remains keyboard reachable",async({page})=>{
-    await page.goto("/");
+    await loadShell(page);
     const markets=page.getByRole("button",{name:"Markets",exact:true});
     if(!(await markets.isVisible()))await page.getByRole("button",{name:"Open navigation",exact:true}).click();
     await markets.press("Enter");
@@ -35,7 +39,7 @@ test.describe("public THRYNT shell",()=>{
   });
 
   test("positions screen labels the owner-assisted protection boundary",async({page})=>{
-    await page.goto("/");
+    await loadShell(page);
     await openScreen(page,"Positions & Risk");
     await expect(page.getByRole("heading",{name:"Owner-held protection workflow",exact:true})).toBeVisible();
     await expect(page.getByText(/THRYNT never requests or stores that private key/)).toBeVisible();
@@ -58,7 +62,7 @@ test.describe("approved trader smoke path",()=>{
   test("approved session exposes owner controls but no signing key",async({browser})=>{
     const context=await browser.newContext({storageState:process.env.THRYNT_E2E_STORAGE_STATE});
     const page=await context.newPage();
-    await page.goto("/");
+    await loadShell(page);
     await openScreen(page,"Settings");
     await expect(page.getByText("Signed in",{exact:true})).toBeVisible();
     await openScreen(page,"Strategy Studio");

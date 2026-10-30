@@ -13,5 +13,10 @@ test-results/
 *.log
 *.tsbuildinfo
 
+# Playwright's temporary video files; the named demo recordings are force-added.
+docs/assets/demo/*.webm
+!docs/assets/demo/thrynt-main-browser-capture.webm
+!docs/assets/demo/thrynt-social-cut.webm
+
 .vercel
 .env*

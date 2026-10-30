@@ -170,7 +170,7 @@ npm run test:e2e
 npm audit --omit=dev --audit-level=high
 ```
 
-The current clean local run reports 15 core tests and 10 engine tests. The parallel Playwright run had 4 passing checks, 2 intentionally skipped owner-session checks, and 2 production-edge timeouts in the long seven-screen loop; immediate isolated desktop and mobile reruns both passed. The transient parallel timeout is not treated as a deterministic application failure, but it remains disclosed here.
+The final local run on 2026-10-30 reports 16 core tests and 13 engine tests. Production Playwright verification reports 8 passed and 2 intentionally skipped owner-session checks because no production storage state is committed or supplied to the run. The passing checks cover desktop/mobile seven-screen navigation, keyboard navigation, anonymous/malformed owner API rejection and the Positions & Risk protection boundary. The approved owner session was verified separately through the authenticated production workflow; credentials and storage state are not stored in the repository.
 
 See [the verification matrix](docs/VERIFICATION.md) before enabling live orders. Type checking and mocked deterministic tests alone are **not** evidence of a real, finalized transaction. For every actual order, verify receipt status, order ID, resting/fill state, correct owner wallet, risk preflight and explorer link.
 

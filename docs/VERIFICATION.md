@@ -7,8 +7,9 @@ safely on 2026-10-28. The deployed engine is observation-only with the global pa
 ## Static checks
 
 - [x] A clean Windows `npm ci` completed successfully on 2026-10-28. npm reported development-tree advisories during install; `npm audit --omit=dev --audit-level=high` returned `found 0 vulnerabilities`.
-- [ ] The clean local run is being refreshed after the position-management and protection telemetry changes. The prior baseline passed `npm run typecheck`, `npm test` (15 core + 10 engine tests), `npm run build`, and the production-only audit; the parallel Playwright run had 4 active checks pass, 2 owner-session checks skipped without injected storage state, and 2 transient production-edge timeouts in the long seven-screen loop.
-- [x] GitHub Actions run [40741595735](https://github.com/ometere123/thrynt/actions/runs/40741595735) passed for implementation commit `438d706dda06520c575e7b04bc35950b274e5d95`, including install, production audit, typecheck, unit tests, build and Playwright checks.
+- [x] A clean Windows dependency install and final local checks completed on 2026-10-30: `npm ci`, `npm run typecheck`, `npm test` (16 core + 13 engine tests), `npm run build`, and `npm audit --omit=dev --audit-level=high` (`found 0 vulnerabilities`).
+- [x] Production Playwright verification on 2026-10-30 completed with 8 passed and 2 intentionally skipped owner-session checks. The passing checks cover desktop/mobile seven-screen navigation, keyboard navigation, anonymous/malformed owner API rejection and the Positions & Risk protection boundary. No production storage state is committed or supplied to CI.
+- [x] GitHub Actions run [41086251158](https://github.com/ometere123/thrynt/actions/runs/41086251158) passed for implementation commit `92b880234deab5e2205af04ea9bbf8309462325b`, including install, production audit, typecheck, unit tests, build and Playwright checks.
 - [x] Secrets never referenced by `NEXT_PUBLIC_` except publishable credentials.
 - [x] Supabase anonymous REST access to application tables is denied by privileges/RLS; service-role telemetry read succeeds.
 - [x] Worker denies anonymous and malformed trader authentication; the approved production session completed owner writes through the explicit `TRADER_USER_ID` allowlist. A separate valid JWT for an unapproved identity was not created solely for testing.

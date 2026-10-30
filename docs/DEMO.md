@@ -77,6 +77,20 @@ End on: “THRYNT — Set the condition. Prove the execution.”
 - Overlay a UTC timestamp and label data as `LIVE HIDEKI`, `RECONCILED`,
   `SIMULATION` or `CONTROLLED TEST` as appropriate.
 
+The checked-in capture set is generated from the public production frontend by
+`node scripts/capture-demo.mjs`:
+
+- `docs/assets/demo/desktop-*.png` — seven desktop screen captures.
+- `docs/assets/demo/mobile-*.png` — seven mobile screen captures.
+- `docs/assets/demo/entry-explorer.png` — the genuine entry receipt page.
+- `docs/assets/demo/thrynt-main-browser-capture.webm` — silent browser capture,
+  approximately 80 seconds; add the supplied script as voiceover/captions for the
+  2–3 minute presentation edit.
+- `docs/assets/demo/thrynt-social-cut.webm` — silent 35-second social cut.
+
+Playwright's temporary recording files are intentionally not submission assets and
+are not added to Git.
+
 ## Evidence links
 
 - Frontend: https://thrynt.vercel.app
